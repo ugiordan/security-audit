@@ -96,6 +96,9 @@ pip-audit, osv-scanner, gosec, yamllint
 - adversarial-reviewing: 5 specialist agents (SEC, PERF, QUAL, CORR, ARCH) + red team + debate
 - rhoai-security-scanner: 3 agents (repo-analyst, security-scanner, post-scan-agent)
 
+AI skills are defined in [ai-skills.yaml](ai-skills.yaml). To add a new
+AI skill: add an entry to that file and list it in plugin.json dependencies.
+
 ## Normalization
 
 All tool outputs are normalized to a common format.

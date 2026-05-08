@@ -1,0 +1,20 @@
+# AI skills invoked during security audit.
+# Add new skills here. Each entry needs:
+#   - skill: the full skill invocation name (plugin:skill)
+#   - name: short name for logs and output directories
+#   - description: what this skill does (for session transcript)
+#
+# Skills listed here are invoked in order after the SAST container
+# starts in the background. They must be installed as plugins.
+# To auto-install them, add to plugin.json dependencies array.
+
+skills:
+  - skill: "adversarial-reviewing:adversarial-reviewing"
+    name: "adversarial-reviewing"
+    description: "Multi-agent code review: 5 specialists (SEC, PERF, QUAL, CORR, ARCH) + red team debate"
+    output_pattern: "/tmp/adversarial-review-cache-*/dispatch/*/output.md"
+
+  - skill: "rhoai-security-scanner:audit"
+    name: "semantic-scan"
+    description: "3-agent semantic security analysis (repo-analyst, security-scanner, post-scan-agent)"
+    output_pattern: "/tmp/*rhoai-security-scanner*/*.json"

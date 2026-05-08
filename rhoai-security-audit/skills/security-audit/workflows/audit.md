@@ -1,14 +1,17 @@
 # Audit Workflow
 
-Full security scan: SAST tools (in container) + AI skills + normalize + dedup + report.
+Full security scan: SAST tools (in container) + AI skills, run in parallel.
 
 ## Checklist
 
 ```
 Audit Progress:
 - [ ] Step 1: Parse input and init session log
-- [ ] Step 2: Run SAST tools in container
-- [ ] Step 3: Run AI skills (adversarial-reviewing)
+- [ ] Step 2: Run SAST + AI skills IN PARALLEL
+      - [ ] 2a: SAST tools in container (background)
+      - [ ] 2b: adversarial-reviewing
+      - [ ] 2c: semantic-scan (rhoai-security-scanner)
+- [ ] Step 3: Collect parallel results
 - [ ] Step 4: Normalize outputs
 - [ ] Step 5: Deduplicate findings
 - [ ] Step 6: Save metadata
@@ -48,98 +51,78 @@ python3 ${CLAUDE_SKILL_DIR}/scripts/session_log.py step \
   --duration <seconds>
 ```
 
-## Step 2: Run SAST tools in container
+## Step 2: Run SAST + AI skills IN PARALLEL
 
-All 15 SAST tools run inside a container. No tools need to be installed
-on the host. The container clones the repo, runs all tools, and writes
-results to a volume-mounted directory.
+SAST tools and AI skills are independent. Run them at the same time.
+
+### 2a: Start SAST container in background
+
+Launch the SAST container scan as a background task. It clones the repo
+internally, runs all 15 tools, writes results to `${OUTPUT_DIR}/raw/`.
 
 ```bash
-bash ${CLAUDE_SKILL_DIR}/scripts/scan_container.sh "${REPO}" "${BRANCH}" "${OUTPUT_DIR}/raw"
+bash ${CLAUDE_SKILL_DIR}/scripts/scan_container.sh "${REPO}" "${BRANCH}" "${OUTPUT_DIR}/raw" &
 ```
 
-This script:
+Or use the Bash tool with `run_in_background: true`:
+```
+Bash(command="bash ${CLAUDE_SKILL_DIR}/scripts/scan_container.sh '${REPO}' '${BRANCH}' '${OUTPUT_DIR}/raw'", run_in_background=true)
+```
+
+The container:
 1. Detects docker or podman
 2. Pulls `quay.io/ugiordan/security-audit-scanner:latest`
 3. Runs all 15 tools inside the container
 4. Writes results to `${OUTPUT_DIR}/raw/`
 5. Falls back to running locally installed tools if no container runtime
 
-After the scan, read `${OUTPUT_DIR}/raw/scan-summary.json` for tool
-counts and timing. Log the step with this information.
-
 Skip if `--skip-sast` flag is set. Log as skipped.
 
-## Step 3: Run AI skills
+### 2b: Run AI skills while SAST runs
 
-AI skills are auto-installed as plugin dependencies. Invoke them
-natively via the Skill tool.
+While the SAST container runs in the background, invoke AI skills.
+The list of AI skills is defined in `ai-skills.yaml` (in the skill
+directory). Adding a new AI skill is just adding an entry to that file
+and listing it in plugin.json dependencies.
 
-### adversarial-reviewing
-
-The adversarial-reviewing plugin is auto-installed as a dependency.
-Invoke it against the repo:
-
-```
-Skill(skill="adversarial-reviewing:adversarial-reviewing", args="${REPO}")
-```
-
-After it completes, find the adversarial-reviewing cache directory
-(printed during init) and copy its outputs:
-
+Read the skills config:
 ```bash
-mkdir -p "${OUTPUT_DIR}/raw/adversarial-reviewing"
-cp -R /tmp/adversarial-review-cache-*/dispatch/*/output.md \
-  "${OUTPUT_DIR}/raw/adversarial-reviewing/" 2>/dev/null || true
-cp /tmp/adversarial-review-cache-*/outputs/* \
-  "${OUTPUT_DIR}/raw/adversarial-reviewing/" 2>/dev/null || true
+cat ${CLAUDE_SKILL_DIR}/ai-skills.yaml
 ```
 
-Log the agent dispatch:
+For each skill entry in `skills:`, invoke it:
+
+```
+Skill(skill="<entry.skill>", args="${REPO}")
+```
+
+After each skill completes, copy its outputs:
+```bash
+mkdir -p "${OUTPUT_DIR}/raw/<entry.name>"
+cp -R <entry.output_pattern> "${OUTPUT_DIR}/raw/<entry.name>/" 2>/dev/null || true
+```
+
+Log each agent dispatch:
 ```bash
 python3 ${CLAUDE_SKILL_DIR}/scripts/session_log.py agent \
   --session-file "${SESSION_FILE}" \
-  --name "adversarial-reviewing" --phase "full-review" \
-  --output-file "${OUTPUT_DIR}/raw/adversarial-reviewing/" \
+  --name "<entry.name>" --phase "full-review" \
+  --output-file "${OUTPUT_DIR}/raw/<entry.name>/" \
   --model "<model-used>" --duration <seconds> \
   --findings-count <count>
 ```
 
-### semantic-scan (rhoai-security-scanner)
+Skip AI skills if `--skip-ai` flag is set. Log as skipped.
 
-The rhoai-security-scanner plugin (Matthew's semantic scanner) is
-auto-installed as a dependency. It uses 3 agents: repo-analyst,
-security-scanner, post-scan-agent.
+## Step 3: Collect parallel results
 
-Invoke it against the repo:
+Wait for the background SAST container to complete. Read
+`${OUTPUT_DIR}/raw/scan-summary.json` for tool counts and timing.
 
-```
-Skill(skill="rhoai-security-scanner:audit", args="${REPO}")
-```
-
-After it completes, copy its outputs:
-
-```bash
-mkdir -p "${OUTPUT_DIR}/raw/semantic-scan"
-# Copy any output files the scanner produced
-find /tmp -maxdepth 3 -name "*.json" -path "*rhoai-security-scanner*" \
-  -exec cp {} "${OUTPUT_DIR}/raw/semantic-scan/" \; 2>/dev/null || true
-```
-
-Log the agent dispatch:
-```bash
-python3 ${CLAUDE_SKILL_DIR}/scripts/session_log.py agent \
-  --session-file "${SESSION_FILE}" \
-  --name "semantic-scan" --phase "full-scan" \
-  --output-file "${OUTPUT_DIR}/raw/semantic-scan/" \
-  --model "<model-used>" --duration <seconds> \
-  --findings-count <count>
-```
+Log the SAST step with tool count, findings count, and duration.
 
 **Important**: Log every agent dispatch, including the model used,
 duration, and reasoning. This creates a full audit trail.
-
-Skip if `--skip-ai` flag is set. Log as skipped.
 
 ## Step 4: Normalize outputs
 
