@@ -52,10 +52,13 @@ output/
   <repo-name>/
     <YYYY-MM-DD>/
       raw/                          # Raw tool outputs (JSON/SARIF)
+        adversarial-reviewing/      # AI skill outputs (if run)
       normalized-findings.json
       deduplicated-findings.json
       scan-metadata.json
       executive-report.md
+      session-log.json              # Structured: every step, timing, reasoning
+      session-transcript.md         # Human-readable: full audit trail
     <YYYY-MM-DD>-2/                 # Counter if date dir exists
   security-trends.json              # Accumulated across all runs
 ```
@@ -69,7 +72,19 @@ python3 ${CLAUDE_SKILL_DIR}/scripts/normalize.py <results-dir>
 python3 ${CLAUDE_SKILL_DIR}/scripts/dedup.py <normalized.json>
 python3 ${CLAUDE_SKILL_DIR}/scripts/report.py <output-dir> [--full]
 python3 ${CLAUDE_SKILL_DIR}/scripts/trends.py --show --trends-file <file>
+python3 ${CLAUDE_SKILL_DIR}/scripts/session_log.py init --repo <repo> --output-dir <dir>
+python3 ${CLAUDE_SKILL_DIR}/scripts/session_log.py step --session-file <f> --name <n> --status ok
+python3 ${CLAUDE_SKILL_DIR}/scripts/session_log.py agent --session-file <f> --name <n> --phase <p>
+python3 ${CLAUDE_SKILL_DIR}/scripts/session_log.py finalize --session-file <f>
 ```
+
+## Session Logging
+
+Every audit run produces a `session-log.json` and `session-transcript.md`.
+These capture the full audit trail: what tools ran, what AI agents were
+dispatched, what they reasoned about, timing for each step, and any errors.
+This is the "model thinking" log, analogous to adversarial-reviewing's
+telemetry.json.
 
 ## Tools
 
