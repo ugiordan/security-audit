@@ -1,0 +1,16 @@
+{
+  "name": "ugiordan-rhoai-security-audit",
+  "owner": {
+    "name": "Ugo Giordano",
+    "email": "ugiordan@redhat.com"
+  },
+  "plugins": [
+    {
+      "name": "rhoai-security-audit",
+      "source": ".",
+      "description": "Security audit skill: SAST tools + AI skills, consolidated reports, trend tracking",
+      "version": "1.0.0",
+      "author": { "name": "Ugo Giordano" }
+    }
+  ]
+}
