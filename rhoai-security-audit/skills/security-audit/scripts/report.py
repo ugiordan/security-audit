@@ -19,12 +19,26 @@ def load_metadata(scan_dir):
         return json.loads(f.read_text())
     return {}
 
+def shorten_path(filepath, repo_name=""):
+    parts = filepath.replace("\\", "/").split("/")
+    if repo_name:
+        short = repo_name.split("/")[-1]
+        for i, p in enumerate(parts):
+            if p == short:
+                return "/".join(parts[i:])
+    for i, p in enumerate(parts):
+        if p in ("repo", "repos"):
+            return "/".join(parts[i + 1:]) if i + 1 < len(parts) else filepath
+    return filepath
+
+
 def generate_report(findings, metadata, full=False):
     lines = []
     repo = metadata.get("repo", "Unknown")
     date = metadata.get("date", "Unknown")
     branch = metadata.get("branch", "main")
     commit = metadata.get("commit", "unknown")[:8]
+    repo_short = repo.split("/")[-1] if "/" in repo else repo
 
     sev_counts = Counter(f["severity"] for f in findings)
     tool_counts = Counter()
@@ -58,8 +72,9 @@ def generate_report(findings, metadata, full=False):
             lines.append(f"|---|--------|------|------|-------|-------------|")
             for i, f in enumerate(sev_findings[:50], 1):
                 detected = ", ".join(f.get("detected_by", [f.get("source", "")]))
-                title = f["title"][:60]
-                lines.append(f"| {i} | {f['source']} | {f['file']} | {f.get('line_start', '-')} | {title} | {detected} |")
+                title = f["title"][:60].replace("|", "/")
+                fpath = shorten_path(f["file"], repo_short)
+                lines.append(f"| {i} | {f['source']} | {fpath} | {f.get('line_start', '-')} | {title} | {detected} |")
             if len(sev_findings) > 50:
                 lines.append(f"| ... | | | | +{len(sev_findings) - 50} more | |")
             lines.append(f"")
@@ -73,7 +88,8 @@ def generate_report(findings, metadata, full=False):
                 lines.append(f"| # | Source | File | Line | Title |")
                 lines.append(f"|---|--------|------|------|-------|")
                 for i, f in enumerate(sev_findings[:30], 1):
-                    lines.append(f"| {i} | {f['source']} | {f['file']} | {f.get('line_start', '-')} | {f['title'][:60]} |")
+                    fpath = shorten_path(f["file"], repo_short)
+                    lines.append(f"| {i} | {f['source']} | {fpath} | {f.get('line_start', '-')} | {f['title'][:60].replace('|','/')} |")
                 if len(sev_findings) > 30:
                     lines.append(f"| ... | | | | +{len(sev_findings) - 30} more |")
                 lines.append(f"")
@@ -90,12 +106,12 @@ def generate_report(findings, metadata, full=False):
 
     lines.append(f"## Recommendations")
     lines.append(f"")
-    recs = [f for f in findings if f.get("recommendation") and f["severity"] in ("critical", "high")]
+    recs = [f for f in findings if f.get("recommendation", "").strip() and f["severity"] in ("critical", "high")]
     seen = set()
     n = 0
     for f in recs:
-        rec = f["recommendation"][:200]
-        if rec not in seen:
+        rec = f["recommendation"].strip().replace("\n", " ")[:120]
+        if rec and rec not in seen and len(rec) > 5:
             n += 1
             seen.add(rec)
             lines.append(f"{n}. **{f['title'][:60]}**: {rec}")
