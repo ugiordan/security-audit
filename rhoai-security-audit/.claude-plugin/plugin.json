@@ -1,7 +1,7 @@
 {
   "name": "rhoai-security-audit",
   "version": "1.0.0",
-  "description": "Security audit skill: SAST tools + AI skills, normalized findings, consolidated reports, trend tracking",
+  "description": "Security audit skill: SAST tools + AI skills, consolidated reports, trend tracking",
   "author": {
     "name": "Ugo Giordano"
   },
