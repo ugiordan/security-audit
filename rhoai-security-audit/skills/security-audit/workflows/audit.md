@@ -1,21 +1,20 @@
 # Audit Workflow
 
-Full security scan: SAST tools + AI skills + normalize + dedup + report.
+Full security scan: SAST tools (in container) + AI skills + normalize + dedup + report.
 
 ## Checklist
 
 ```
 Audit Progress:
 - [ ] Step 1: Parse input and init session log
-- [ ] Step 2: Clone repo
-- [ ] Step 3: Run SAST tools
-- [ ] Step 4: Run AI skills (adversarial-reviewing)
-- [ ] Step 5: Normalize outputs
-- [ ] Step 6: Deduplicate findings
-- [ ] Step 7: Save results
-- [ ] Step 8: Generate report
-- [ ] Step 9: Update trends
-- [ ] Step 10: Finalize session log
+- [ ] Step 2: Run SAST tools in container
+- [ ] Step 3: Run AI skills (adversarial-reviewing)
+- [ ] Step 4: Normalize outputs
+- [ ] Step 5: Deduplicate findings
+- [ ] Step 6: Save metadata
+- [ ] Step 7: Generate report
+- [ ] Step 8: Update trends
+- [ ] Step 9: Finalize session log
 ```
 
 ## Step 1: Parse input and init session log
@@ -49,76 +48,73 @@ python3 ${CLAUDE_SKILL_DIR}/scripts/session_log.py step \
   --duration <seconds>
 ```
 
-## Step 2: Clone repo
+## Step 2: Run SAST tools in container
+
+All 15 SAST tools run inside a container. No tools need to be installed
+on the host. The container clones the repo, runs all tools, and writes
+results to a volume-mounted directory.
 
 ```bash
-WORKDIR=$(mktemp -d)
-git clone --depth 1 --branch "${BRANCH:-main}" \
-  "https://github.com/${REPO}.git" "$WORKDIR/repo"
-COMMIT_SHA=$(git -C "$WORKDIR/repo" rev-parse HEAD)
+bash ${CLAUDE_SKILL_DIR}/scripts/scan_container.sh "${REPO}" "${BRANCH}" "${OUTPUT_DIR}/raw"
 ```
 
-Log the step with commit SHA in detail.
+This script:
+1. Detects docker or podman
+2. Pulls `quay.io/ugiordan/security-audit-scanner:latest`
+3. Runs all 15 tools inside the container
+4. Writes results to `${OUTPUT_DIR}/raw/`
+5. Falls back to running locally installed tools if no container runtime
 
-## Step 3: Run SAST tools
-
-Run each available tool against the cloned repo. For each tool, capture
-output to `${OUTPUT_DIR}/raw/<tool>-report.json` (or `.sarif`).
-
-Tools to run (skip any not installed):
-- `semgrep scan --config auto --json`
-- `gitleaks detect --source <repo> --report-format json`
-- `shellcheck -f json` (on .sh files)
-- `hadolint -f sarif` (on Dockerfiles)
-- `trivy fs --format json --scanners vuln`
-- `kube-linter lint --format json` (on config/ dir)
-- `trufflehog filesystem <repo> --json`
-- `govulncheck -format json ./...` (if go.mod exists)
-- `grype dir:<repo> -o json`
-- `osv-scanner --json <repo>`
-- `gosec -fmt json ./...` (if go.mod exists)
-
-Log the step with tool count and total findings in detail.
+After the scan, read `${OUTPUT_DIR}/raw/scan-summary.json` for tool
+counts and timing. Log the step with this information.
 
 Skip if `--skip-sast` flag is set. Log as skipped.
 
-## Step 4: Run AI skills
+## Step 3: Run AI skills
 
-Invoke installed AI skills against the cloned repo. Each skill runs
-as a separate agent dispatch.
+AI skills are auto-installed as plugin dependencies. Invoke them
+natively via the Skill tool.
 
 ### adversarial-reviewing
 
-If the `adversarial-reviewing` plugin is installed, invoke it:
+The adversarial-reviewing plugin is auto-installed as a dependency.
+Invoke it against the repo:
 
 ```
-Skill(skill="adversarial-reviewing:adversarial-reviewing", args="<repo-path>")
+Skill(skill="adversarial-reviewing:adversarial-reviewing", args="${REPO}")
 ```
 
-After it completes, copy its outputs from the adversarial-reviewing
-cache directory to `${OUTPUT_DIR}/raw/adversarial-reviewing/`.
+After it completes, find the adversarial-reviewing cache directory
+(printed during init) and copy its outputs:
+
+```bash
+mkdir -p "${OUTPUT_DIR}/raw/adversarial-reviewing"
+cp -R /tmp/adversarial-review-cache-*/dispatch/*/output.md \
+  "${OUTPUT_DIR}/raw/adversarial-reviewing/" 2>/dev/null || true
+cp /tmp/adversarial-review-cache-*/outputs/* \
+  "${OUTPUT_DIR}/raw/adversarial-reviewing/" 2>/dev/null || true
+```
 
 Log the agent dispatch:
 ```bash
 python3 ${CLAUDE_SKILL_DIR}/scripts/session_log.py agent \
   --session-file "${SESSION_FILE}" \
   --name "adversarial-reviewing" --phase "full-review" \
-  --output-file "${OUTPUT_DIR}/raw/adversarial-reviewing/output.md" \
+  --output-file "${OUTPUT_DIR}/raw/adversarial-reviewing/" \
   --model "<model-used>" --duration <seconds> \
   --findings-count <count>
 ```
 
-### semantic-scan (if available)
+### semantic-scan (future)
 
-If the `rhoai-semantic-scan` plugin is installed, invoke it similarly.
+When the rhoai-semantic-scan plugin is available, invoke it similarly.
 
 **Important**: Log every agent dispatch, including the model used,
-duration, and any reasoning the agent provided. This creates a full
-audit trail of what the AI "thought" at each step.
+duration, and reasoning. This creates a full audit trail.
 
 Skip if `--skip-ai` flag is set. Log as skipped.
 
-## Step 5: Normalize outputs
+## Step 4: Normalize outputs
 
 ```bash
 python3 "${CLAUDE_SKILL_DIR}/scripts/normalize.py" "${OUTPUT_DIR}/raw" \
@@ -127,7 +123,7 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/normalize.py" "${OUTPUT_DIR}/raw" \
 
 Log the step with finding counts per tool.
 
-## Step 6: Deduplicate findings
+## Step 5: Deduplicate findings
 
 ```bash
 python3 "${CLAUDE_SKILL_DIR}/scripts/dedup.py" \
@@ -137,29 +133,15 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/dedup.py" \
 
 Log with raw vs deduped counts.
 
-## Step 7: Save metadata
+## Step 6: Save metadata
 
-```bash
-python3 -c "
-import json
-data = {
-    'date': '${DATE}',
-    'repo': '${REPO}',
-    'branch': '${BRANCH}',
-    'commit': '${COMMIT_SHA}',
-    'tools_run': [<list of tools that ran>],
-    'ai_skills_run': [<list of AI skills that ran>],
-    'findings': {
-        'critical': <count>, 'high': <count>,
-        'medium': <count>, 'low': <count>, 'info': <count>,
-        'total_raw': <raw_count>, 'total_deduped': <dedup_count>
-    }
-}
-json.dump(data, open('${OUTPUT_DIR}/scan-metadata.json', 'w'), indent=2)
-"
-```
+Create scan-metadata.json with all run details:
+- date, repo, branch, commit SHA
+- tools_run (from scan-summary.json)
+- ai_skills_run
+- finding counts by severity (from deduplicated findings)
 
-## Step 8: Generate report
+## Step 7: Generate report
 
 ```bash
 python3 "${CLAUDE_SKILL_DIR}/scripts/report.py" "${OUTPUT_DIR}" \
@@ -172,7 +154,7 @@ Log your reasoning for each prioritization decision.
 
 Present the executive report to the user.
 
-## Step 9: Update trends
+## Step 8: Update trends
 
 ```bash
 python3 "${CLAUDE_SKILL_DIR}/scripts/trends.py" \
@@ -182,7 +164,7 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/trends.py" \
 
 Show the trends table to the user.
 
-## Step 10: Finalize session log
+## Step 9: Finalize session log
 
 ```bash
 python3 ${CLAUDE_SKILL_DIR}/scripts/session_log.py finalize \
@@ -193,9 +175,3 @@ This writes `session-log.json` (structured) and
 `session-transcript.md` (human-readable) to the output directory.
 The transcript includes all step timings, reasoning, and AI agent
 dispatch details with prompt/output previews.
-
-## Cleanup
-
-```bash
-rm -rf "$WORKDIR"
-```

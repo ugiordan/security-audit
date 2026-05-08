@@ -1,0 +1,119 @@
+# Scanner image with all 15 SAST tools pre-installed.
+# No dashboard, no Claude Code, just tools + scan scripts.
+#
+# Build (on OCP): oc start-build security-audit-scanner --from-dir=. --follow
+# Build (local):  docker build -f Dockerfile.scanner -t quay.io/ugiordan/security-audit-scanner:latest .
+# Push:           docker push quay.io/ugiordan/security-audit-scanner:latest
+
+# Stage 1: Go tools
+FROM registry.access.redhat.com/ubi9/go-toolset:1.24 AS go-tools
+USER 0
+ENV GOPATH=/go
+RUN go install golang.org/x/vuln/cmd/govulncheck@v1.1.4 \
+    && go install github.com/securego/gosec/v2/cmd/gosec@v2.22.4
+
+# Stage 2: Final image
+FROM registry.access.redhat.com/ubi9/python-312:latest
+ARG TARGETARCH
+
+USER 0
+WORKDIR /scanner
+
+RUN dnf install -y --nodocs git jq && dnf clean all && rm -rf /var/cache/dnf
+
+# Go tools from builder
+COPY --from=go-tools /go/bin/govulncheck /usr/local/bin/
+COPY --from=go-tools /go/bin/gosec /usr/local/bin/
+
+# shellcheck
+RUN case "${TARGETARCH:-amd64}" in \
+      amd64) SC_ARCH="x86_64" ;; \
+      arm64) SC_ARCH="aarch64" ;; \
+    esac && \
+    curl -sSfL -o /tmp/sc.tar.xz \
+      "https://github.com/koalaman/shellcheck/releases/download/v0.10.0/shellcheck-v0.10.0.linux.${SC_ARCH}.tar.xz" \
+    && tar -xJf /tmp/sc.tar.xz -C /tmp/ \
+    && mv /tmp/shellcheck-v0.10.0/shellcheck /usr/local/bin/ \
+    && rm -rf /tmp/sc* /tmp/shellcheck*
+
+# kube-linter
+RUN case "${TARGETARCH:-amd64}" in \
+      amd64) KL_SUFFIX="linux" ;; \
+      arm64) KL_SUFFIX="linux_arm64" ;; \
+    esac && \
+    curl -sSfL -o /tmp/kl.tar.gz \
+      "https://github.com/stackrox/kube-linter/releases/download/v0.8.3/kube-linter-${KL_SUFFIX}.tar.gz" \
+    && tar -xzf /tmp/kl.tar.gz -C /usr/local/bin/ kube-linter && rm /tmp/kl.tar.gz
+
+# Python tools
+ENV PIP_DEFAULT_TIMEOUT=300
+RUN pip install --no-cache-dir semgrep yamllint pip-audit zizmor
+
+# hadolint
+RUN case "${TARGETARCH:-amd64}" in \
+      amd64) HL_ARCH="x86_64" ;; \
+      arm64) HL_ARCH="arm64" ;; \
+    esac && \
+    curl -sSfL -o /usr/local/bin/hadolint \
+      "https://github.com/hadolint/hadolint/releases/download/v2.14.0/hadolint-Linux-${HL_ARCH}" \
+    && chmod +x /usr/local/bin/hadolint
+
+# gitleaks
+RUN case "${TARGETARCH:-amd64}" in \
+      amd64) GL_ARCH="x64" ;; \
+      arm64) GL_ARCH="arm64" ;; \
+    esac && \
+    curl -sSfL -o /tmp/gl.tar.gz \
+      "https://github.com/gitleaks/gitleaks/releases/download/v8.30.0/gitleaks_8.30.0_linux_${GL_ARCH}.tar.gz" \
+    && tar -xzf /tmp/gl.tar.gz -C /usr/local/bin/ gitleaks && rm /tmp/gl.tar.gz
+
+# trufflehog
+RUN case "${TARGETARCH:-amd64}" in \
+      amd64) TH_ARCH="amd64" ;; \
+      arm64) TH_ARCH="arm64" ;; \
+    esac && \
+    curl -sSfL -o /tmp/th.tar.gz \
+      "https://github.com/trufflesecurity/trufflehog/releases/download/v3.92.3/trufflehog_3.92.3_linux_${TH_ARCH}.tar.gz" \
+    && tar -xzf /tmp/th.tar.gz -C /usr/local/bin/ trufflehog && rm /tmp/th.tar.gz
+
+# trivy
+RUN case "${TARGETARCH:-amd64}" in \
+      amd64) TV_ARCH="64bit" ;; \
+      arm64) TV_ARCH="ARM64" ;; \
+    esac && \
+    curl -sSfL -o /tmp/tv.tar.gz \
+      "https://github.com/aquasecurity/trivy/releases/download/v0.70.0/trivy_0.70.0_Linux-${TV_ARCH}.tar.gz" \
+    && tar -xzf /tmp/tv.tar.gz -C /usr/local/bin/ trivy && rm /tmp/tv.tar.gz
+
+# grype
+RUN curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+
+# osv-scanner
+RUN case "${TARGETARCH:-amd64}" in \
+      amd64) OSV_ARCH="amd64" ;; \
+      arm64) OSV_ARCH="arm64" ;; \
+    esac && \
+    curl -sSfL -o /usr/local/bin/osv-scanner \
+      "https://github.com/google/osv-scanner/releases/latest/download/osv-scanner_linux_${OSV_ARCH}" \
+    && chmod +x /usr/local/bin/osv-scanner
+
+# actionlint
+RUN case "${TARGETARCH:-amd64}" in \
+      amd64) AL_ARCH="amd64" ;; \
+      arm64) AL_ARCH="arm64" ;; \
+    esac && \
+    curl -sSfL -o /tmp/al.tar.gz \
+      "https://github.com/rhysd/actionlint/releases/download/v1.7.8/actionlint_1.7.8_linux_${AL_ARCH}.tar.gz" \
+    && tar -xzf /tmp/al.tar.gz -C /usr/local/bin/ actionlint && rm /tmp/al.tar.gz
+
+# Copy scan and normalize scripts
+COPY skills/security-audit/scripts/run_all.sh /scanner/run_all.sh
+COPY skills/security-audit/scripts/normalize.py /scanner/normalize.py
+COPY skills/security-audit/scripts/dedup.py /scanner/dedup.py
+RUN chmod +x /scanner/run_all.sh
+
+RUN mkdir -p /scanner/repos /scanner/results && chown -R 1001:0 /scanner
+USER 1001
+ENV HOME=/tmp
+
+ENTRYPOINT ["/scanner/run_all.sh"]
