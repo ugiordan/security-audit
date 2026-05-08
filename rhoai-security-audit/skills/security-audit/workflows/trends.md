@@ -5,14 +5,14 @@ Show security finding trends across previous scan runs.
 ## Usage
 
 ```
-/security-audit:trends [--repo <name>] [--last <n>] [--output <dir>]
+/rhoai-security-audit:security-audit trends [--repo <name>] [--last <n>] [--output <dir>]
 ```
 
 ## Steps
 
 1. **Load trends data**:
    ```bash
-   python3 "${SKILL_DIR}/scripts/trends.py" \
+   python3 "${CLAUDE_SKILL_DIR}/scripts/trends.py" \
      --show \
      --trends-file "output/security-trends.json" \
      [--repo <name>] \

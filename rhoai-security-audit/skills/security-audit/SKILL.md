@@ -1,93 +1,74 @@
 ---
 name: security-audit
-description: >
-  Runs SAST tools and AI security skills against repositories, normalizes
-  outputs, deduplicates findings, and generates consolidated reports with
-  trend tracking. Use when asked to scan repos, generate security reports,
-  check vulnerabilities, review security posture, or track security trends.
+description: Runs SAST tools and AI security skills against repositories, normalizes outputs, deduplicates findings across tools, and generates consolidated reports with trend tracking. Use when asked to scan repos, generate security reports, review security posture, or track security trends.
 ---
 
 # Security Audit
 
-Full security analysis: SAST tools + AI skills, normalized output,
-deduplicated findings, consolidated reports, trend tracking.
+Full security analysis: SAST tools + AI skills, normalized findings,
+cross-tool deduplication, consolidated reports, trend tracking.
 
-## Quick Start
+## Usage
 
-```bash
-# Scan a single repo (SAST + AI + report + trends)
-/security-audit opendatahub-io/opendatahub-operator
-
-# Scan multiple repos
-/security-audit opendatahub-io/kserve opendatahub-io/odh-dashboard
-
-# Scan repos from config file
-/security-audit --config scan-config.yaml
-
-# Generate report from existing scan data
-/security-audit:report --full
-
-# View trends across runs
-/security-audit:trends --last 10
+```
+/rhoai-security-audit:security-audit opendatahub-io/opendatahub-operator
+/rhoai-security-audit:security-audit opendatahub-io/kserve opendatahub-io/odh-dashboard
+/rhoai-security-audit:security-audit --config scan-config.yaml
 ```
 
-## Commands
-
-### `/security-audit <repos> [flags]`
-
-Full scan: SAST tools + AI skills + normalize + dedup + report + trends.
-See [commands/audit.md](commands/audit.md) for detailed steps.
-
-### `/security-audit:report [flags]`
-
-Generate reports from existing scan data (no new scan).
-See [commands/report.md](commands/report.md) for details.
-
-### `/security-audit:trends [flags]`
-
-Show trends across previous runs.
-See [commands/trends.md](commands/trends.md) for details.
+Pass `report` or `trends` as first arg to skip scanning:
+```
+/rhoai-security-audit:security-audit report --full
+/rhoai-security-audit:security-audit trends --last 10
+```
 
 ## Flags
 
-| Flag | Command | Default | Description |
-|------|---------|---------|-------------|
-| `--config <file>` | audit | - | YAML file with repos list |
-| `--branch <name>` | audit | main | Branch to scan |
-| `--output <dir>` | all | ./output | Output directory |
-| `--skip-sast` | audit | false | Skip SAST tools |
-| `--skip-ai` | audit | false | Skip AI skills |
-| `--ai-prioritize` | audit | false | AI-assisted finding ranking |
-| `--parallel <n>` | audit | 2 | Max concurrent repo scans |
-| `--full` | report | false | Include all severities |
-| `--format <md\|docx>` | report | md | Report format |
-| `--date <YYYY-MM-DD>` | report | latest | Use specific scan date |
-| `--repo <name>` | report, trends | all | Filter to specific repo |
-| `--last <n>` | trends | 10 | Show last N entries |
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--config <file>` | - | YAML file with `repos:` list |
+| `--branch <name>` | main | Branch to scan |
+| `--output <dir>` | ./output | Output directory |
+| `--skip-sast` | false | Skip SAST tools (AI only) |
+| `--skip-ai` | false | Skip AI skills (SAST only) |
+| `--ai-prioritize` | false | AI-assisted finding ranking |
+| `--full` | false | Include all severities in report |
+| `--repo <name>` | all | Filter report/trends to specific repo |
+| `--last <n>` | 10 | Show last N trend entries |
 
-## Command Routing
+## Intent Detection
 
-When the user's request does not explicitly name a command, determine
-intent from context:
+Determine what the user wants from their request:
 
-- "scan", "audit", "analyze", "check security" -> `/security-audit`
-- "report", "summary", "findings" (no scan requested) -> `/security-audit:report`
-- "trends", "history", "over time", "track" -> `/security-audit:trends`
-- Ambiguous or "do everything" -> chain: audit -> report -> trends
+- "scan", "audit", "analyze", "check security" -> full audit (see [workflows/audit.md](workflows/audit.md))
+- "report", "summary", "findings" (no scan) -> report only (see [workflows/report.md](workflows/report.md))
+- "trends", "history", "over time", "track" -> trends only (see [workflows/trends.md](workflows/trends.md))
+- Ambiguous or "do everything" -> chain: audit, then report, then trends
 
 ## Output Structure
 
 ```
 output/
   <repo-name>/
-    <YYYY-MM-DD>/           # Each run gets a dated directory
-      raw/                  # Raw tool outputs (JSON/SARIF per tool)
+    <YYYY-MM-DD>/
+      raw/                          # Raw tool outputs (JSON/SARIF)
       normalized-findings.json
       deduplicated-findings.json
       scan-metadata.json
       executive-report.md
-    <YYYY-MM-DD>-2/         # Counter appended if date dir exists
-  security-trends.json      # Accumulated across all runs
+    <YYYY-MM-DD>-2/                 # Counter if date dir exists
+  security-trends.json              # Accumulated across all runs
+```
+
+## Scripts
+
+All deterministic work uses bundled Python scripts. Run via:
+
+```bash
+python3 ${CLAUDE_SKILL_DIR}/scripts/normalize.py <results-dir>
+python3 ${CLAUDE_SKILL_DIR}/scripts/dedup.py <normalized.json>
+python3 ${CLAUDE_SKILL_DIR}/scripts/report.py <output-dir> [--full]
+python3 ${CLAUDE_SKILL_DIR}/scripts/trends.py --show --trends-file <file>
 ```
 
 ## Tools
@@ -97,7 +78,6 @@ hadolint, actionlint, zizmor, shellcheck, trivy, grype, govulncheck,
 pip-audit, osv-scanner, gosec, yamllint
 
 **AI Skills** (native invocation): adversarial-reviewing, semantic-scan
-(rhoai-security-scanner:audit)
 
 ## Normalization
 

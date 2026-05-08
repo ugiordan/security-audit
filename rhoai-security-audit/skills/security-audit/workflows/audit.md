@@ -38,8 +38,7 @@ git clone --depth 1 --branch "${BRANCH:-main}" \
 
 Find `scan-repo.sh` in the scanner installation:
 ```bash
-SCANNER_DIR="$(cd "$(dirname "${SKILL_DIR}")/../.." && pwd)"
-bash "${SCANNER_DIR}/scripts/scan-repo.sh" "$WORKDIR/repo" "$RESULTS_DIR"
+bash "${CLAUDE_SKILL_DIR}/../../scripts/scan-repo.sh" "${REPO}" "$RESULTS_DIR"
 ```
 
 If `scan-repo.sh` is not found, run tools individually.
@@ -63,7 +62,7 @@ Skip if `--skip-ai` flag is set.
 ## Step 5: Normalize outputs
 
 ```bash
-python3 "${SKILL_DIR}/scripts/normalize.py" "$RESULTS_DIR" \
+python3 "${CLAUDE_SKILL_DIR}/scripts/normalize.py" "$RESULTS_DIR" \
   > "$OUTPUT_DIR/normalized-findings.json"
 ```
 
@@ -72,7 +71,7 @@ This converts all tool outputs to the common finding format.
 ## Step 6: Deduplicate findings
 
 ```bash
-python3 "${SKILL_DIR}/scripts/dedup.py" \
+python3 "${CLAUDE_SKILL_DIR}/scripts/dedup.py" \
   "$OUTPUT_DIR/normalized-findings.json" \
   > "$OUTPUT_DIR/deduplicated-findings.json"
 ```
@@ -93,7 +92,7 @@ Save:
 ## Step 8: Generate report
 
 ```bash
-python3 "${SKILL_DIR}/scripts/report.py" "$OUTPUT_DIR" \
+python3 "${CLAUDE_SKILL_DIR}/scripts/report.py" "$OUTPUT_DIR" \
   > "$OUTPUT_DIR/executive-report.md"
 ```
 
@@ -105,7 +104,7 @@ Present the executive report to the user.
 ## Step 9: Update trends
 
 ```bash
-python3 "${SKILL_DIR}/scripts/trends.py" \
+python3 "${CLAUDE_SKILL_DIR}/scripts/trends.py" \
   --add "$OUTPUT_DIR/scan-metadata.json" \
   --trends-file "output/security-trends.json"
 ```

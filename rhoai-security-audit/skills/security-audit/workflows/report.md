@@ -5,7 +5,7 @@ Generate consolidated security reports from existing scan data.
 ## Usage
 
 ```
-/security-audit:report [--repo <name>] [--full] [--format md|docx] [--date <YYYY-MM-DD>]
+/rhoai-security-audit:security-audit report [--repo <name>] [--full] [--format md|docx] [--date <YYYY-MM-DD>]
 ```
 
 ## Steps
@@ -19,7 +19,7 @@ Generate consolidated security reports from existing scan data.
 
 3. **Generate report**:
    ```bash
-   python3 "${SKILL_DIR}/scripts/report.py" "$SCAN_DIR" [--full]
+   python3 "${CLAUDE_SKILL_DIR}/scripts/report.py" "$SCAN_DIR" [--full]
    ```
 
 4. **Present to user**: Display the report and save to the scan directory.
