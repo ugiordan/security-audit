@@ -12,14 +12,17 @@ ENV GOPATH=/go
 RUN go install golang.org/x/vuln/cmd/govulncheck@v1.1.4 \
     && go install github.com/securego/gosec/v2/cmd/gosec@v2.22.4
 
-# Stage 2: Final image
-FROM registry.access.redhat.com/ubi9/python-312:latest
+# Stage 2: Final image (Ubuntu 24.04 for semgrep compatibility)
+FROM ubuntu:24.04
 ARG TARGETARCH
 
 USER 0
 WORKDIR /scanner
 
-RUN dnf install -y --nodocs git jq && dnf clean all && rm -rf /var/cache/dnf
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
+    git jq python3 python3-pip curl xz-utils ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 
 # Go tools from builder
 COPY --from=go-tools /go/bin/govulncheck /usr/local/bin/
@@ -45,13 +48,14 @@ RUN case "${TARGETARCH:-amd64}" in \
       "https://github.com/stackrox/kube-linter/releases/download/v0.8.3/kube-linter-${KL_SUFFIX}.tar.gz" \
     && tar -xzf /tmp/kl.tar.gz -C /usr/local/bin/ kube-linter && rm /tmp/kl.tar.gz
 
-# Python tools
+# Python tools + semgrep
 ENV PIP_DEFAULT_TIMEOUT=300
-RUN pip install --no-cache-dir yamllint pip-audit zizmor
-
-# semgrep: pin to 1.145.0 (last version compatible with glibc 2.34 on UBI9)
-# Newer versions (1.146+) require glibc >= 2.35 (Ubuntu 22.04+)
-RUN pip install --no-cache-dir semgrep==1.145.0
+RUN pip install --no-cache-dir --break-system-packages semgrep yamllint pip-audit zizmor && \
+    SEMGREP_BIN=$(python3 -c "import semgrep.bin, os; print(os.path.dirname(semgrep.bin.__file__))") && \
+    if [ -f "${SEMGREP_BIN}/semgrep-core.exe" ] && [ ! -f "${SEMGREP_BIN}/semgrep-core" ]; then \
+      mv "${SEMGREP_BIN}/semgrep-core.exe" "${SEMGREP_BIN}/semgrep-core" && \
+      chmod +x "${SEMGREP_BIN}/semgrep-core"; \
+    fi
 
 # hadolint
 RUN case "${TARGETARCH:-amd64}" in \
@@ -123,8 +127,7 @@ RUN chmod +x /scanner/scripts/scan-repo.sh
 COPY skills/security-audit/scripts/normalize.py /scanner/normalize.py
 COPY skills/security-audit/scripts/dedup.py /scanner/dedup.py
 
-RUN mkdir -p /scanner/repos /scanner/results && chown -R 1001:0 /scanner
-USER 1001
+RUN mkdir -p /scanner/repos /scanner/results
 ENV HOME=/tmp
 
 ENTRYPOINT ["/scanner/scripts/scan-repo.sh"]
