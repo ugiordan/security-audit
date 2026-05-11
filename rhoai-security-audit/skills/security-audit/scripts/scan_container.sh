@@ -2,11 +2,6 @@
 # Host-side wrapper: runs SAST tools inside a container using scan-repo.sh
 # with all the tuned configs from rhoai-security-scanner.
 #
-# The container bundles:
-# - scan-repo.sh (the same script used by GHA workflows)
-# - configs/ (semgrep rules, gitleaks ignore, kube-linter config, grype config, etc.)
-# - All 15 SAST tools pre-installed
-#
 # Usage: scan_container.sh <org/repo> <branch> <results-dir>
 set -euo pipefail
 
@@ -30,17 +25,30 @@ if [ -n "${RUNTIME}" ]; then
   echo "Running SAST scan in container (${RUNTIME}, image: ${IMAGE})"
   ${RUNTIME} pull "${IMAGE}" 2>/dev/null || true
 
-  # scan-repo.sh writes to <results-base>/<repo-short>/
-  # We mount the parent dir so scan-repo.sh can create the repo subdir
-  RESULTS_PARENT="$(dirname "${RESULTS_DIR}")"
-  RESULTS_BASE="$(basename "${RESULTS_DIR}")"
+  # scan-repo.sh usage: scan-repo.sh <org/repo> <results-base-dir>
+  # It clones the repo internally and writes to <results-base>/<repo-short>/
+  #
+  # We mount a temp dir as /results. scan-repo.sh writes to
+  # /results/<repo-short>/. After the container exits, we move
+  # the contents to RESULTS_DIR.
+  MOUNT_DIR="$(mktemp -d)"
 
   ${RUNTIME} run --rm \
-    -v "${RESULTS_DIR}:/results:z" \
+    -v "${MOUNT_DIR}:/results:z" \
     -w /scanner \
     "${IMAGE}" \
     "${REPO}" /results
-  echo "Container scan complete. Results in ${RESULTS_DIR}"
+
+  # Move results from <repo-short>/ subdir to RESULTS_DIR
+  if [ -d "${MOUNT_DIR}/${REPO_SHORT}" ]; then
+    cp -R "${MOUNT_DIR}/${REPO_SHORT}/"* "${RESULTS_DIR}/" 2>/dev/null || true
+    rm -rf "${MOUNT_DIR}"
+    echo "Container scan complete. Results in ${RESULTS_DIR}"
+  else
+    echo "WARNING: Expected ${MOUNT_DIR}/${REPO_SHORT}/ but not found"
+    ls "${MOUNT_DIR}/" 2>/dev/null
+    rm -rf "${MOUNT_DIR}"
+  fi
 else
   echo "WARNING: No container runtime (docker/podman) found."
   echo "Running with locally installed tools only. Some tools may be missing."

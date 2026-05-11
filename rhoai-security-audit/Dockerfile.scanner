@@ -109,9 +109,11 @@ RUN case "${TARGETARCH:-amd64}" in \
 # Copy scan-repo.sh and tuned configs.
 # Build context must include these files. Use the build script:
 #   ./build-scanner.sh  (copies from rhoai-security-scanner repo)
-COPY scan-repo.sh /scanner/scan-repo.sh
+# Layout: /scanner/scripts/scan-repo.sh + /scanner/configs/
+# scan-repo.sh resolves configs via CONFIGS_DIR="${SCRIPT_DIR}/../configs"
+COPY scan-repo.sh /scanner/scripts/scan-repo.sh
 COPY configs/ /scanner/configs/
-RUN chmod +x /scanner/scan-repo.sh
+RUN chmod +x /scanner/scripts/scan-repo.sh
 
 # Copy normalize/dedup scripts from the skill
 COPY skills/security-audit/scripts/normalize.py /scanner/normalize.py
@@ -121,4 +123,4 @@ RUN mkdir -p /scanner/repos /scanner/results && chown -R 1001:0 /scanner
 USER 1001
 ENV HOME=/tmp
 
-ENTRYPOINT ["/scanner/scan-repo.sh"]
+ENTRYPOINT ["/scanner/scripts/scan-repo.sh"]
