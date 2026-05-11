@@ -12,17 +12,14 @@ ENV GOPATH=/go
 RUN go install golang.org/x/vuln/cmd/govulncheck@v1.1.4 \
     && go install github.com/securego/gosec/v2/cmd/gosec@v2.22.4
 
-# Stage 2: Final image (Ubuntu 24.04 for semgrep compatibility)
-FROM ubuntu:24.04
+# Stage 2: Final image (UBI10 has glibc 2.39, required by semgrep-core)
+FROM registry.access.redhat.com/ubi10:latest
 ARG TARGETARCH
 
 USER 0
 WORKDIR /scanner
 
-ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
-    git jq python3 python3-pip curl xz-utils ca-certificates && \
-    rm -rf /var/lib/apt/lists/*
+RUN dnf install -y --nodocs git jq python3-pip xz && dnf clean all && rm -rf /var/cache/dnf
 
 # Go tools from builder
 COPY --from=go-tools /go/bin/govulncheck /usr/local/bin/
