@@ -49,8 +49,9 @@ RUN case "${TARGETARCH:-amd64}" in \
 ENV PIP_DEFAULT_TIMEOUT=300
 RUN pip install --no-cache-dir yamllint pip-audit zizmor
 
-# semgrep: use the standalone installer that bundles semgrep-core
-RUN curl -sSfL https://semgrep.dev/static/install-semgrep.sh | bash -s -- --prefix /usr/local
+# semgrep: pin to 1.145.0 (last version compatible with glibc 2.34 on UBI9)
+# Newer versions (1.146+) require glibc >= 2.35 (Ubuntu 22.04+)
+RUN pip install --no-cache-dir semgrep==1.145.0
 
 # hadolint
 RUN case "${TARGETARCH:-amd64}" in \
