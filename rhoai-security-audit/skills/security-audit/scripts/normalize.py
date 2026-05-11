@@ -311,12 +311,48 @@ PARSERS = {
 }
 
 
+_CONTAINER_PATH_RE = re.compile(r"^/tmp/scan-[^/]+/")
+
+
+def _clean_file_path(filepath, repo_name=""):
+    if not filepath:
+        return filepath
+    filepath = filepath.replace("\\", "/")
+    filepath = _CONTAINER_PATH_RE.sub("", filepath)
+    filepath = filepath.lstrip("/")
+    if repo_name:
+        short = repo_name.split("/")[-1]
+        prefix = f"{short}/"
+        if filepath.startswith(prefix):
+            filepath = filepath[len(prefix):]
+    return filepath
+
+
 def main():
     if len(sys.argv) < 2:
-        print("Usage: normalize.py <results-dir>", file=sys.stderr)
+        print("Usage: normalize.py <results-dir> [--repo org/repo]", file=sys.stderr)
         sys.exit(1)
 
-    results_dir = Path(sys.argv[1])
+    repo_name = ""
+    args = sys.argv[1:]
+    results_dir_str = args[0]
+    for i, a in enumerate(args):
+        if a == "--repo" and i + 1 < len(args):
+            repo_name = args[i + 1]
+
+    if not repo_name:
+        parts = Path(results_dir_str).parts
+        for p in parts:
+            if p.startswith("scan-"):
+                repo_name = p[len("scan-"):]
+                break
+        if not repo_name:
+            for i, p in enumerate(parts):
+                if p == "output" and i + 1 < len(parts):
+                    repo_name = parts[i + 1]
+                    break
+
+    results_dir = Path(results_dir_str)
     if not results_dir.is_dir():
         print(f"Not a directory: {results_dir}", file=sys.stderr)
         sys.exit(1)
@@ -338,6 +374,10 @@ def main():
             all_findings.extend(findings)
         except Exception as e:
             print(f"Warning: failed to parse {filepath}: {e}", file=sys.stderr)
+
+    for f in all_findings:
+        if f.get("file"):
+            f["file"] = _clean_file_path(f["file"], repo_name)
 
     json.dump(all_findings, sys.stdout, indent=2)
 

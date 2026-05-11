@@ -32,17 +32,32 @@ def load_metadata(scan_dir):
     return {}
 
 
+_CONTAINER_PATH_RE_RPT = __import__("re").compile(r"^/tmp/scan-[^/]+/")
+
+
 def shorten_path(filepath, repo_name=""):
-    parts = filepath.replace("\\", "/").split("/")
+    filepath = filepath.replace("\\", "/")
+    filepath = _CONTAINER_PATH_RE_RPT.sub("", filepath)
+    filepath = filepath.lstrip("/")
+    parts = filepath.split("/")
     if repo_name:
-        short = repo_name.split("/")[-1]
-        for i, p in enumerate(parts):
-            if p == short:
-                return "/".join(parts[i + 1:])
-    for i, p in enumerate(parts):
-        if p in ("repo", "repos"):
-            return "/".join(parts[i + 1:]) if i + 1 < len(parts) else filepath
+        short = repo_name.split("/")[-1] if "/" in repo_name else repo_name
+        if parts and parts[0] == short:
+            filepath = "/".join(parts[1:])
+        elif parts and parts[0] == f"scan-{short}":
+            filepath = "/".join(parts[1:])
     return filepath
+
+
+def github_link(filepath, repo_full, branch="main", line=None):
+    """Return a markdown link to the file on GitHub."""
+    clean = shorten_path(filepath, repo_full)
+    if not clean:
+        return filepath
+    url = f"https://github.com/{repo_full}/blob/{branch}/{clean}"
+    if line and line > 0:
+        url += f"#L{line}"
+    return f"[{clean}]({url})"
 
 
 def _severity_badge(sev):
@@ -57,6 +72,9 @@ def generate_single_report(findings, metadata, full=False):
     branch = metadata.get("branch", "main")
     commit = metadata.get("commit", "unknown")[:8]
     repo_short = repo.split("/")[-1] if "/" in repo else repo
+
+    def _link(f):
+        return github_link(f["file"], repo, branch, f.get("line_start"))
 
     sev_counts = Counter(f["severity"] for f in findings)
     tool_counts = Counter()
@@ -135,32 +153,20 @@ def generate_single_report(findings, metadata, full=False):
         sca_crit = [f for f in sca_findings if f["severity"] == "critical"]
         sca_high = [f for f in sca_findings if f["severity"] == "high"]
 
-        if sca_crit:
-            lines.append(f"### Critical CVEs ({len(sca_crit)})")
+        for sca_sev, sca_list in [("Critical", sca_crit), ("High", sca_high)]:
+            if not sca_list:
+                continue
+            lines.append(f"### {sca_sev} CVEs ({len(sca_list)})")
             lines.append("")
             lines.append("| # | CVE / Advisory | Package | Source | Fix |")
             lines.append("|---|---------------|---------|--------|-----|")
-            for i, f in enumerate(sca_crit[:30], 1):
+            for i, f in enumerate(sca_list[:30], 1):
                 title = f["title"][:60].replace("|", "/")
-                fpath = shorten_path(f["file"], repo_short)
+                flink = _link(f)
                 rec = f.get("recommendation", "")[:40].replace("|", "/")
-                lines.append(f"| {i} | {title} | {fpath} | {f['source']} | {rec} |")
-            if len(sca_crit) > 30:
-                lines.append(f"| ... | +{len(sca_crit) - 30} more | | | |")
-            lines.append("")
-
-        if sca_high:
-            lines.append(f"### High CVEs ({len(sca_high)})")
-            lines.append("")
-            lines.append("| # | CVE / Advisory | Package | Source | Fix |")
-            lines.append("|---|---------------|---------|--------|-----|")
-            for i, f in enumerate(sca_high[:30], 1):
-                title = f["title"][:60].replace("|", "/")
-                fpath = shorten_path(f["file"], repo_short)
-                rec = f.get("recommendation", "")[:40].replace("|", "/")
-                lines.append(f"| {i} | {title} | {fpath} | {f['source']} | {rec} |")
-            if len(sca_high) > 30:
-                lines.append(f"| ... | +{len(sca_high) - 30} more | | | |")
+                lines.append(f"| {i} | {title} | {flink} | {f['source']} | {rec} |")
+            if len(sca_list) > 30:
+                lines.append(f"| ... | +{len(sca_list) - 30} more | | | |")
             lines.append("")
 
     # Secrets section
@@ -168,15 +174,15 @@ def generate_single_report(findings, metadata, full=False):
     if secret_findings:
         lines.append(f"## Secrets Detected ({len(secret_findings)})")
         lines.append("")
-        lines.append("| # | Source | File | Line | Description | Verified |")
-        lines.append("|---|--------|------|------|-------------|----------|")
+        lines.append("| # | Source | File | Description | Verified |")
+        lines.append("|---|--------|------|-------------|----------|")
         for i, f in enumerate(secret_findings[:20], 1):
-            fpath = shorten_path(f["file"], repo_short)
+            flink = _link(f)
             title = f["title"][:50].replace("|", "/")
             verified = "yes" if f.get("confidence", 0) > 0.9 else "no"
-            lines.append(f"| {i} | {f['source']} | {fpath} | {f.get('line_start', '-')} | {title} | {verified} |")
+            lines.append(f"| {i} | {f['source']} | {flink} | {title} | {verified} |")
         if len(secret_findings) > 20:
-            lines.append(f"| ... | +{len(secret_findings) - 20} more | | | | |")
+            lines.append(f"| ... | +{len(secret_findings) - 20} more | | | |")
         lines.append("")
 
     # Critical + High SAST findings (non-SCA, non-secrets)
@@ -187,13 +193,13 @@ def generate_single_report(findings, metadata, full=False):
         if sev_findings:
             lines.append(f"## {sev.title()} SAST Findings ({len(sev_findings)})")
             lines.append("")
-            lines.append("| # | Tool | File | Line | Title | Detected By |")
-            lines.append("|---|------|------|------|-------|-------------|")
+            lines.append("| # | Tool | File | Title | Detected By |")
+            lines.append("|---|------|------|-------|-------------|")
             for i, f in enumerate(sev_findings[:50], 1):
                 detected = ", ".join(f.get("detected_by", [f.get("source", "")]))
                 title = f["title"][:55].replace("|", "/")
-                fpath = shorten_path(f["file"], repo_short)
-                lines.append(f"| {i} | {f['source']} | {fpath} | {f.get('line_start', '-')} | {title} | {detected} |")
+                flink = _link(f)
+                lines.append(f"| {i} | {f['source']} | {flink} | {title} | {detected} |")
             if len(sev_findings) > 50:
                 lines.append(f"| ... | | | | +{len(sev_findings) - 50} more | |")
             lines.append("")
@@ -205,11 +211,11 @@ def generate_single_report(findings, metadata, full=False):
             if sev_findings:
                 lines.append(f"## {sev.title()} Findings ({len(sev_findings)})")
                 lines.append("")
-                lines.append("| # | Tool | File | Line | Title |")
-                lines.append("|---|------|------|------|-------|")
+                lines.append("| # | Tool | File | Title |")
+                lines.append("|---|------|------|-------|")
                 for i, f in enumerate(sev_findings[:30], 1):
-                    fpath = shorten_path(f["file"], repo_short)
-                    lines.append(f"| {i} | {f['source']} | {fpath} | {f.get('line_start', '-')} | {f['title'][:55].replace('|','/')} |")
+                    flink = _link(f)
+                    lines.append(f"| {i} | {f['source']} | {flink} | {f['title'][:55].replace('|','/')} |")
                 if len(sev_findings) > 30:
                     lines.append(f"| ... | | | | +{len(sev_findings) - 30} more |")
                 lines.append("")
@@ -348,11 +354,10 @@ def generate_multi_report(scan_dirs, full=False):
 
         crits = [f for f in findings if f["severity"] == "critical"]
         if crits:
-            repo_short = repo.split("/")[-1] if "/" in repo else repo
             lines.append("**Critical findings:**")
             for f in crits[:10]:
-                fpath = shorten_path(f["file"], repo_short)
-                lines.append(f"- [{f['source']}] {fpath}:{f.get('line_start','')} {f['title'][:60]}")
+                flink = github_link(f["file"], repo, branch="main", line=f.get("line_start"))
+                lines.append(f"- [{f['source']}] {flink}: {f['title'][:60]}")
             if len(crits) > 10:
                 lines.append(f"- +{len(crits) - 10} more")
             lines.append("")
