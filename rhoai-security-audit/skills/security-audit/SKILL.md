@@ -68,16 +68,16 @@ Skip ONLY if `--skip-ai` flag was explicitly passed.
 Wait for the background SAST scan to complete. Then:
 
 ```bash
-python3 ${CLAUDE_SKILL_DIR}/scripts/normalize.py "${OUTPUT_DIR}/raw" > "${OUTPUT_DIR}/normalized-findings.json"
-python3 ${CLAUDE_SKILL_DIR}/scripts/dedup.py "${OUTPUT_DIR}/normalized-findings.json" > "${OUTPUT_DIR}/deduplicated-findings.json"
+python3 ${CLAUDE_SKILL_DIR}/scripts/normalize.py "${OUTPUT_DIR}/raw" > "${OUTPUT_DIR}/.normalized-findings.tmp" && mv "${OUTPUT_DIR}/.normalized-findings.tmp" "${OUTPUT_DIR}/normalized-findings.json"
+python3 ${CLAUDE_SKILL_DIR}/scripts/dedup.py "${OUTPUT_DIR}/normalized-findings.json" > "${OUTPUT_DIR}/.deduplicated-findings.tmp" && mv "${OUTPUT_DIR}/.deduplicated-findings.tmp" "${OUTPUT_DIR}/deduplicated-findings.json"
 ```
 
 **Step 5: Generate ALL THREE reports**
 
 ```bash
-python3 ${CLAUDE_SKILL_DIR}/scripts/report.py "${OUTPUT_DIR}" > "${OUTPUT_DIR}/executive-report.md"
-python3 ${CLAUDE_SKILL_DIR}/scripts/report_mustfix.py "${OUTPUT_DIR}" > "${OUTPUT_DIR}/must-fix-report.md"
-python3 ${CLAUDE_SKILL_DIR}/scripts/report_html.py "${OUTPUT_DIR}" > "${OUTPUT_DIR}/security-report.html"
+python3 ${CLAUDE_SKILL_DIR}/scripts/report.py "${OUTPUT_DIR}" > "${OUTPUT_DIR}/.report.tmp" && mv "${OUTPUT_DIR}/.report.tmp" "${OUTPUT_DIR}/executive-report.md"
+python3 ${CLAUDE_SKILL_DIR}/scripts/report_mustfix.py "${OUTPUT_DIR}" > "${OUTPUT_DIR}/.mustfix.tmp" && mv "${OUTPUT_DIR}/.mustfix.tmp" "${OUTPUT_DIR}/must-fix-report.md"
+python3 ${CLAUDE_SKILL_DIR}/scripts/report_html.py "${OUTPUT_DIR}" > "${OUTPUT_DIR}/.html.tmp" && mv "${OUTPUT_DIR}/.html.tmp" "${OUTPUT_DIR}/security-report.html"
 ```
 
 All three. Every run. No exceptions.
