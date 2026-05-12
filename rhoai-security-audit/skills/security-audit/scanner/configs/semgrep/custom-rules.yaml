@@ -1,0 +1,164 @@
+# Semgrep Rules: Component-Specific Custom Rules
+# Category: Custom security rules for your specific component
+# Target: Component-specific patterns not covered by generic RHOAI rules
+#
+# This file is a template for teams to add custom Semgrep rules specific
+# to their component's unique security requirements.
+#
+# USAGE:
+# 1. Copy examples below and modify for your use case
+# 2. Add component-specific patterns (e.g., model loading, API integrations)
+# 3. Document why each rule exists (link to CVE, design doc, incident)
+# 4. Test rules locally: semgrep --config .github/semgrep/ .
+
+rules: []
+  # ═══════════════════════════════════════════════════════════════════════
+  # Example 1: Component-Specific API Pattern
+  # ═══════════════════════════════════════════════════════════════════════
+  # Uncomment and customize for your component:
+  #
+  # - id: custom-unsafe-model-loader
+  #   patterns:
+  #     - pattern: loadModel($PATH)
+  #     - pattern-not-inside: |
+  #         if validateModelPath($PATH) { ... }
+  #   message: |
+  #     Model loaded without path validation.
+  #
+  #     CONTEXT: Our component loads ML models from user-specified paths.
+  #     Previous incident (JIRA-1234) showed path traversal vulnerability.
+  #
+  #     REMEDIATION:
+  #     Call validateModelPath() before loadModel():
+  #
+  #     ```go
+  #     if err := validateModelPath(modelPath); err != nil {
+  #         return err
+  #     }
+  #     model := loadModel(modelPath)
+  #     ```
+  #
+  #     REFERENCES:
+  #     - Incident report: JIRA-1234
+  #     - CWE-22: Path Traversal
+  #   severity: ERROR
+  #   languages: [go]
+  #   metadata:
+  #     category: security
+  #     cwe: "CWE-22"
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # Example 2: Deprecated Function Usage
+  # ═══════════════════════════════════════════════════════════════════════
+  # Uncomment and customize:
+  #
+  # - id: custom-deprecated-auth-function
+  #   pattern: authenticateWithLegacyToken($TOKEN)
+  #   message: |
+  #     Use of deprecated authentication function.
+  #
+  #     CONTEXT: authenticateWithLegacyToken() uses MD5 for token validation,
+  #     which is cryptographically broken. Replaced in v2.0 with HMAC-SHA256.
+  #
+  #     REMEDIATION:
+  #     Use authenticateWithHMAC() instead:
+  #
+  #     ```go
+  #     // BEFORE:
+  #     authenticateWithLegacyToken(token)
+  #
+  #     // AFTER:
+  #     authenticateWithHMAC(token)
+  #     ```
+  #
+  #     REFERENCES:
+  #     - Migration guide: docs/auth-migration.md
+  #     - CWE-327: Use of Broken Crypto
+  #   severity: WARNING
+  #   languages: [go]
+  #   metadata:
+  #     category: security
+  #     cwe: "CWE-327"
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # Example 3: Required Annotation Pattern
+  # ═══════════════════════════════════════════════════════════════════════
+  # Uncomment and customize:
+  #
+  # - id: custom-missing-security-annotation
+  #   patterns:
+  #     - pattern: |
+  #         apiVersion: ai.redhat.com/v1
+  #         kind: InferenceService
+  #         metadata:
+  #           annotations: ...
+  #     - pattern-not: |
+  #         apiVersion: ai.redhat.com/v1
+  #         kind: InferenceService
+  #         metadata:
+  #           annotations:
+  #             security.openshift.io/scc.podSecurityLabelSync: "false"
+  #   paths:
+  #     include:
+  #       - "config/samples/*.yaml"
+  #       - "examples/*.yaml"
+  #   message: |
+  #     InferenceService sample missing required security annotation.
+  #
+  #     CONTEXT: All InferenceService samples must disable automatic SCC sync
+  #     to prevent privilege escalation in multi-tenant clusters.
+  #
+  #     REMEDIATION:
+  #     Add annotation to metadata:
+  #
+  #     ```yaml
+  #     apiVersion: ai.redhat.com/v1
+  #     kind: InferenceService
+  #     metadata:
+  #       annotations:
+  #         security.openshift.io/scc.podSecurityLabelSync: "false"
+  #     ```
+  #
+  #     REFERENCES:
+  #     - Security design: docs/multi-tenant-security.md
+  #   severity: WARNING
+  #   languages: [yaml]
+  #   metadata:
+  #     category: security
+
+# ══════════════════════════════════════════════════════════════════════════
+# GUIDELINES FOR WRITING CUSTOM RULES
+# ══════════════════════════════════════════════════════════════════════════
+#
+# 1. **Document context**: Why does this rule exist? Link to CVE/incident/design
+# 2. **Provide remediation**: Show exact code change needed
+# 3. **Test before committing**: Run `semgrep --config .github/semgrep/ .`
+# 4. **Avoid duplicates**: Check if generic RHOAI rules already cover this
+# 5. **Use appropriate severity**:
+#    - ERROR: Real vulnerability, blocks PR
+#    - WARNING: Code smell or deprecated pattern
+#    - INFO: Best practice recommendation
+#
+# USEFUL SEMGREP PATTERNS:
+# - `pattern: foo($X)` - Match function call
+# - `pattern-not: foo($X)` - Exclude pattern
+# - `pattern-inside: if validate($X) { ... }` - Match inside block
+# - `pattern-either: [...]` - Match any of multiple patterns
+# - `metavariable-pattern: ...` - Match variable content
+#
+# TESTING RULES:
+# ```bash
+# # Test on specific file
+# semgrep --config .github/semgrep/custom-rules.yaml path/to/file.go
+#
+# # Test on entire repo
+# semgrep --config .github/semgrep/ .
+#
+# # Auto-fix (if rule supports it)
+# semgrep --config .github/semgrep/custom-rules.yaml --autofix .
+# ```
+#
+# RESOURCES:
+# - Semgrep Rule Syntax: https://semgrep.dev/docs/writing-rules/rule-syntax/
+# - Semgrep Registry: https://semgrep.dev/explore (find examples)
+# - Test rules: https://semgrep.dev/playground

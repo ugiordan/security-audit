@@ -1,0 +1,647 @@
+# Semgrep Security Rules: RHOAI Authorization and Privilege Escalation Patterns
+# Template Version: 2.0.0
+#
+# These rules detect missing authorization checks, credential leakage, and
+# privilege escalation patterns specific to RHOAI components.
+#
+# Target Repos:
+#   - odh-dashboard (TypeScript/Fastify backend with secureRoute middleware)
+#   - model-registry (Go HTTP API with no in-process auth)
+#   - kserve, data-science-pipelines-operator, modelmesh-serving, opendatahub-operator (Go operators)
+#
+# Vulnerability class: CWE-285 (Improper Authorization), CWE-200 (Information Exposure)
+#
+# Origin: NIM serving endpoint missing secureRoute (April 2026)
+
+rules:
+  # ==========================================================================
+  # ODH-DASHBOARD: MISSING AUTHORIZATION MIDDLEWARE (TypeScript/Fastify)
+  # ==========================================================================
+  # The odh-dashboard backend uses secureRoute(fastify) and secureAdminRoute(fastify)
+  # as authorization middleware wrapping route handlers. Routes that access K8s
+  # resources (Secrets, ConfigMaps) without this middleware allow any authenticated
+  # user to read/write resources they shouldn't have access to.
+  #
+  # Real code patterns:
+  #   VULNERABLE (nim-serving):
+  #     fastify.get('/:nimResource', async (request) => {
+  #       const { coreV1Api, namespace } = fastify.kube;
+  #       return await coreV1Api.readNamespacedSecret(resourceName, namespace);
+  #     });
+  #
+  #   SECURE (integrations/nim):
+  #     fastify.post('/', secureAdminRoute(fastify)(async (request, reply) => {
+  #       // handler with K8s calls
+  #     }));
+
+  # --- Rule 1: Destructured coreV1Api reading Secrets without secureRoute ---
+  # Catches: const { coreV1Api } = fastify.kube; ... coreV1Api.readNamespacedSecret(...)
+  # inside a fastify route handler NOT wrapped by secureRoute/secureAdminRoute
+  - id: rhoai-dashboard-secret-read-no-auth
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: |
+      K8s Secret read without authorization middleware (CWE-285, CWE-200).
+
+      This route reads Kubernetes Secrets via a destructured coreV1Api client
+      but the route handler is not wrapped with secureRoute(fastify) or
+      secureAdminRoute(fastify) to verify the calling user's RBAC permissions.
+
+      Impact: Any authenticated dashboard user can read Secret data (API keys,
+      credentials, docker pull secrets) regardless of their K8s RBAC permissions.
+      The dashboard SA has broad Secret read access, so this is a privilege
+      escalation from "dashboard user" to "cluster secret reader."
+
+      Fix: Wrap the route handler with secureRoute or secureAdminRoute:
+        fastify.get('/:resource',
+          secureRoute(fastify)(async (request, reply) => {
+            const { coreV1Api, namespace } = fastify.kube;
+            return await coreV1Api.readNamespacedSecret(name, namespace);
+          })
+        );
+
+      Real-world example: odh-dashboard NIM serving endpoint exposed NIM API keys
+      and docker pull credentials to all authenticated users.
+    patterns:
+      - pattern: |
+          $FASTIFY.$METHOD($PATH, async ($REQ, ...) =>
+            {
+              ...
+              coreV1Api.readNamespacedSecret(...)
+              ...
+            }
+          )
+      - pattern-not: |
+          $FASTIFY.$METHOD($PATH, secureRoute($F)(...))
+      - pattern-not: |
+          $FASTIFY.$METHOD($PATH, secureAdminRoute($F)(...))
+      - metavariable-regex:
+          metavariable: $METHOD
+          regex: '(get|post|put|delete|patch)'
+    metadata:
+      cwe: "CWE-285"
+      owasp: "A01:2021 - Broken Access Control"
+      category: "security"
+
+  # --- Rule 2: Destructured coreV1Api listing Secrets without secureRoute ---
+  - id: rhoai-dashboard-secret-list-no-auth
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: |
+      K8s Secret list without authorization middleware (CWE-285, CWE-200).
+
+      This route lists Kubernetes Secrets without secureRoute/secureAdminRoute.
+      See rhoai-dashboard-secret-read-no-auth for full details and fix.
+    patterns:
+      - pattern: |
+          $FASTIFY.$METHOD($PATH, async ($REQ, ...) =>
+            {
+              ...
+              coreV1Api.listNamespacedSecret(...)
+              ...
+            }
+          )
+      - pattern-not: |
+          $FASTIFY.$METHOD($PATH, secureRoute($F)(...))
+      - pattern-not: |
+          $FASTIFY.$METHOD($PATH, secureAdminRoute($F)(...))
+      - metavariable-regex:
+          metavariable: $METHOD
+          regex: '(get|post|put|delete|patch)'
+    metadata:
+      cwe: "CWE-285"
+      owasp: "A01:2021 - Broken Access Control"
+      category: "security"
+
+  # --- Rule 3: Direct fastify.kube.coreV1Api Secret access without auth ---
+  # Catches the non-destructured form (less common but should be covered)
+  - id: rhoai-dashboard-direct-secret-read-no-auth
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: |
+      Direct K8s Secret read via fastify.kube without authorization (CWE-285).
+
+      This route reads Secrets using fastify.kube.coreV1Api directly (not
+      destructured) without secureRoute/secureAdminRoute middleware.
+
+      Fix: Wrap the handler with secureRoute(fastify)(...).
+    patterns:
+      - pattern: |
+          $FASTIFY.$METHOD($PATH, async ($REQ, ...) =>
+            {
+              ...
+              $FASTIFY.kube.coreV1Api.readNamespacedSecret(...)
+              ...
+            }
+          )
+      - pattern-not: |
+          $FASTIFY.$METHOD($PATH, secureRoute($F)(...))
+      - pattern-not: |
+          $FASTIFY.$METHOD($PATH, secureAdminRoute($F)(...))
+      - metavariable-regex:
+          metavariable: $METHOD
+          regex: '(get|post|put|delete|patch)'
+    metadata:
+      cwe: "CWE-285"
+      owasp: "A01:2021 - Broken Access Control"
+      category: "security"
+
+  # --- Rule 4: Utility function that reads Secrets from fastify.kube ---
+  # Catches: helper functions that take fastify instance and read secrets
+  # without the caller being responsible for auth (like segmentKeyUtils.ts)
+  - id: rhoai-dashboard-utility-secret-read
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: |
+      Utility function reads K8s Secrets from fastify instance (CWE-285).
+
+      This function receives a KubeFastifyInstance and reads K8s Secrets.
+      Ensure ALL callers wrap their route handler with secureRoute/secureAdminRoute.
+      If any caller is a bare route handler (no secureRoute), this is a
+      privilege escalation vulnerability.
+
+      Review: Check all callers of this function for proper auth middleware.
+    patterns:
+      - pattern: |
+          async function $FN($FASTIFY: KubeFastifyInstance, ...): $RET {
+            ...
+            $API.readNamespacedSecret(...)
+            ...
+          }
+      - pattern-not-inside: secureRoute(...)
+      - pattern-not-inside: secureAdminRoute(...)
+    metadata:
+      cwe: "CWE-285"
+      category: "security"
+
+  # --- Rule 4b: Arrow function utility variant ---
+  - id: rhoai-dashboard-utility-secret-read-arrow
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: |
+      Utility function reads K8s Secrets from fastify instance (CWE-285).
+
+      This exported function receives a fastify instance and reads K8s Secrets.
+      Ensure ALL callers wrap their route handler with secureRoute/secureAdminRoute.
+
+      Review: Check all callers of this function for proper auth middleware.
+    pattern: |
+      export const $FN = async ($FASTIFY: KubeFastifyInstance, ...): $RET => {
+        ...
+        $API.readNamespacedSecret(...)
+        ...
+      }
+    metadata:
+      cwe: "CWE-285"
+      category: "security"
+
+  # --- Rule 5: K8s write operations without auth ---
+  - id: rhoai-dashboard-secret-write-no-auth
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: |
+      K8s Secret write operation without authorization middleware (CWE-285).
+
+      This route performs a write operation (create/update/patch/delete) on
+      K8s Secrets without secureRoute/secureAdminRoute. Any authenticated user
+      can modify credentials.
+
+      Fix: Wrap the handler with secureAdminRoute(fastify)(...).
+    patterns:
+      - pattern-either:
+          - pattern: |
+              $FASTIFY.$METHOD($PATH, async ($REQ, ...) =>
+                {
+                  ...
+                  coreV1Api.createNamespacedSecret(...)
+                  ...
+                }
+              )
+          - pattern: |
+              $FASTIFY.$METHOD($PATH, async ($REQ, ...) =>
+                {
+                  ...
+                  coreV1Api.patchNamespacedSecret(...)
+                  ...
+                }
+              )
+          - pattern: |
+              $FASTIFY.$METHOD($PATH, async ($REQ, ...) =>
+                {
+                  ...
+                  coreV1Api.deleteNamespacedSecret(...)
+                  ...
+                }
+              )
+          - pattern: |
+              $FASTIFY.$METHOD($PATH, async ($REQ, ...) =>
+                {
+                  ...
+                  coreV1Api.replaceNamespacedSecret(...)
+                  ...
+                }
+              )
+      - pattern-not: |
+          $FASTIFY.$METHOD($PATH, secureRoute($F)(...))
+      - pattern-not: |
+          $FASTIFY.$METHOD($PATH, secureAdminRoute($F)(...))
+      - metavariable-regex:
+          metavariable: $METHOD
+          regex: '(get|post|put|delete|patch)'
+    metadata:
+      cwe: "CWE-285"
+      owasp: "A01:2021 - Broken Access Control"
+      category: "security"
+
+  # --- Rule 6: ConfigMap access without auth ---
+  - id: rhoai-dashboard-configmap-no-auth
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: |
+      K8s ConfigMap access without authorization middleware (CWE-285).
+
+      This route reads/writes ConfigMaps using a destructured coreV1Api without
+      secureRoute/secureAdminRoute. ConfigMaps can contain configuration that
+      controls security-relevant behavior (feature flags, endpoint URLs).
+
+      Fix: Wrap the handler with secureRoute(fastify)(...).
+    patterns:
+      - pattern-either:
+          - pattern: |
+              $FASTIFY.$METHOD($PATH, async ($REQ, ...) =>
+                {
+                  ...
+                  coreV1Api.readNamespacedConfigMap(...)
+                  ...
+                }
+              )
+          - pattern: |
+              $FASTIFY.$METHOD($PATH, async ($REQ, ...) =>
+                {
+                  ...
+                  coreV1Api.createNamespacedConfigMap(...)
+                  ...
+                }
+              )
+          - pattern: |
+              $FASTIFY.$METHOD($PATH, async ($REQ, ...) =>
+                {
+                  ...
+                  coreV1Api.patchNamespacedConfigMap(...)
+                  ...
+                }
+              )
+      - pattern-not: |
+          $FASTIFY.$METHOD($PATH, secureRoute($F)(...))
+      - pattern-not: |
+          $FASTIFY.$METHOD($PATH, secureAdminRoute($F)(...))
+      - metavariable-regex:
+          metavariable: $METHOD
+          regex: '(get|post|put|delete|patch)'
+    metadata:
+      cwe: "CWE-285"
+      owasp: "A01:2021 - Broken Access Control"
+      category: "security"
+
+  # ==========================================================================
+  # GO OPERATORS: SECRET DATA LEAKAGE (CWE-200, CWE-532)
+  # ==========================================================================
+  # Go operators/controllers read K8s Secrets for DB passwords, S3 credentials,
+  # API keys, etc. Secret data must never appear in logs, error messages,
+  # status conditions, or events.
+
+  - id: rhoai-go-secret-data-in-log
+    languages: [go]
+    severity: ERROR
+    message: |
+      K8s Secret data passed to logger (CWE-532, CWE-200).
+
+      Secret.Data or Secret.StringData values are being logged. This exposes
+      credentials in container logs, log aggregation systems (Splunk, ELK),
+      and potentially in support bundles shared with customers.
+
+      Fix: Log the Secret name/namespace for debugging, never the data:
+        log.Info("Using secret", "name", secret.Name, "namespace", secret.Namespace)
+    patterns:
+      - pattern-either:
+          - pattern: $LOG.Info(..., $SECRET.Data, ...)
+          - pattern: $LOG.Error(..., $SECRET.Data, ...)
+          - pattern: $LOG.Info(..., $SECRET.StringData, ...)
+          - pattern: $LOG.Error(..., $SECRET.StringData, ...)
+          - pattern: log.Printf(..., $SECRET.Data, ...)
+          - pattern: log.Printf(..., $SECRET.StringData, ...)
+          - pattern: fmt.Sprintf(..., $SECRET.Data, ...)
+          - pattern: fmt.Sprintf(..., $SECRET.StringData, ...)
+          - pattern: $LOG.Info(..., "...", $SECRET.Data[$KEY], ...)
+          - pattern: $LOG.Error(..., "...", $SECRET.Data[$KEY], ...)
+    metadata:
+      cwe: "CWE-532"
+      owasp: "A09:2021 - Security Logging and Monitoring Failures"
+      category: "security"
+
+  - id: rhoai-go-secret-data-in-status
+    languages: [go]
+    severity: ERROR
+    message: |
+      K8s Secret data in CR status or event (CWE-200).
+
+      Secret values are being included in a Custom Resource status condition
+      or Kubernetes Event. Status conditions and Events are readable by any
+      user with get/list access to the CR or namespace, which is a much
+      broader audience than Secret read access.
+
+      Fix: Reference the Secret by name, never include the value:
+        condition.Message = fmt.Sprintf("Using credentials from secret %s", secret.Name)
+    patterns:
+      - pattern-either:
+          - pattern: |
+              $STATUS.Message = fmt.Sprintf(..., $SECRET.Data[$KEY], ...)
+          - pattern: |
+              $RECORDER.Event(..., fmt.Sprintf(..., $SECRET.Data[$KEY], ...), ...)
+          - pattern: |
+              $RECORDER.Eventf(..., $SECRET.Data[$KEY], ...)
+    metadata:
+      cwe: "CWE-200"
+      owasp: "A01:2021 - Broken Access Control"
+      category: "security"
+
+  - id: rhoai-go-secret-data-in-error
+    languages: [go]
+    severity: WARNING
+    message: |
+      K8s Secret data in error message (CWE-209).
+
+      Including Secret data in error values risks exposure through:
+        - Controller logs (errors are typically logged by the reconcile loop)
+        - CR status conditions (reconcile errors often get written to status)
+        - API error responses
+
+      Fix: Reference the Secret by name in error messages:
+        return fmt.Errorf("failed to connect using secret %s/%s: %w", ns, name, err)
+    patterns:
+      - pattern-either:
+          - pattern: fmt.Errorf(..., $SECRET.Data[$KEY], ...)
+          - pattern: fmt.Errorf(..., string($SECRET.Data[$KEY]), ...)
+    metadata:
+      cwe: "CWE-209"
+      category: "security"
+
+  # ==========================================================================
+  # GO OPERATORS: WEBHOOK AUTHORIZATION GAPS (CWE-285)
+  # ==========================================================================
+
+  - id: rhoai-go-webhook-no-userinfo-check
+    languages: [go]
+    severity: WARNING
+    message: |
+      Admission webhook Handle() does not check request UserInfo (CWE-285).
+
+      This webhook handler processes admission requests without examining
+      req.UserInfo (the identity of the API caller). For webhooks that enforce
+      security policies (e.g., preventing non-admins from modifying certain
+      resources), the user identity must be checked.
+
+      Not all webhooks need this. Defaulting webhooks that only set defaults
+      are fine without it. But validating webhooks that enforce access policies
+      should verify the caller.
+
+      Fix: Check req.UserInfo when enforcing policies:
+        if !isAdmin(req.UserInfo.Username, req.UserInfo.Groups) {
+          return admission.Denied("only admins can modify this resource")
+        }
+    patterns:
+      - pattern: |
+          func ($HANDLER) Handle($CTX context.Context, $REQ admission.Request) admission.Response {
+            ...
+          }
+      - pattern-not: |
+          func ($HANDLER) Handle($CTX context.Context, $REQ admission.Request) admission.Response {
+            ...
+            $REQ.UserInfo
+            ...
+          }
+    metadata:
+      cwe: "CWE-285"
+      owasp: "A01:2021 - Broken Access Control"
+      category: "security"
+
+  # ==========================================================================
+  # GO HTTP SERVERS: MISSING AUTH MIDDLEWARE (CWE-306)
+  # ==========================================================================
+
+  - id: rhoai-go-http-handler-reads-secret-no-auth
+    languages: [go]
+    severity: ERROR
+    message: |
+      HTTP handler reads K8s Secrets without auth middleware (CWE-306, CWE-285).
+
+      An HTTP handler function calls the K8s API to read Secrets but there
+      is no authentication/authorization middleware in the handler chain.
+      If the external auth proxy is misconfigured or bypassed (e.g., via
+      internal service-to-service calls), this endpoint exposes credentials.
+
+      Fix: Add in-process auth middleware as defense in depth:
+        mux.Handle("/api/secret", authMiddleware(secretHandler))
+    patterns:
+      - pattern-either:
+          - pattern: |
+              func $HANDLER($W http.ResponseWriter, $R *http.Request) {
+                ...
+                $CLIENT.CoreV1().Secrets($NS).Get(...)
+                ...
+              }
+          - pattern: |
+              func $HANDLER($W http.ResponseWriter, $R *http.Request) {
+                ...
+                $CLIENT.CoreV1().Secrets($NS).List(...)
+                ...
+              }
+    metadata:
+      cwe: "CWE-306"
+      owasp: "A07:2021 - Identification and Authentication Failures"
+      category: "security"
+
+  # ==========================================================================
+  # GO OPERATORS: SA TOKEN / KUBECONFIG LEAKAGE (CWE-200)
+  # ==========================================================================
+
+  - id: rhoai-go-sa-token-in-response
+    languages: [go]
+    severity: ERROR
+    message: |
+      Service account token path or value in HTTP response (CWE-200).
+
+      The service account token file path or its contents are being included
+      in an HTTP response or log message. This token grants the full
+      permissions of the operator's service account.
+
+      Fix: Never expose the SA token. Log/return only non-sensitive metadata.
+    patterns:
+      - pattern-either:
+          - pattern: |
+              $DATA, $ERR = os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/token")
+              ...
+              $W.Write($DATA)
+          - pattern: fmt.Fprintf($W, ..., "/var/run/secrets/kubernetes.io/serviceaccount/token", ...)
+    metadata:
+      cwe: "CWE-200"
+      category: "security"
+
+  - id: rhoai-go-bearer-token-logged
+    languages: [go]
+    severity: ERROR
+    message: |
+      Bearer token or Authorization header value logged (CWE-532).
+
+      Logging authentication tokens exposes them in container logs and log
+      aggregation systems. Attackers with log access can impersonate the
+      token owner.
+
+      Fix: Mask or omit auth headers from log output:
+        log.Info("request received", "method", r.Method, "path", r.URL.Path)
+    patterns:
+      - pattern-either:
+          - pattern: $LOG.Info(..., $REQ.Header.Get("Authorization"), ...)
+          - pattern: $LOG.Error(..., $REQ.Header.Get("Authorization"), ...)
+          - pattern: log.Printf(..., $REQ.Header.Get("Authorization"), ...)
+          - pattern: fmt.Sprintf(..., $REQ.Header.Get("Authorization"), ...)
+          - pattern: $LOG.Info(..., "Authorization", $REQ.Header.Get("Authorization"), ...)
+    metadata:
+      cwe: "CWE-532"
+      category: "security"
+
+  # ==========================================================================
+  # KUBERNETES YAML: PODS WITHOUT DEDICATED SERVICE ACCOUNTS (CWE-250)
+  # ==========================================================================
+
+  - id: k8s-pod-default-serviceaccount
+    languages: [yaml]
+    severity: WARNING
+    message: |
+      Pod uses default ServiceAccount (CWE-250).
+
+      The default ServiceAccount may have more permissions than needed.
+      Each workload should use a dedicated ServiceAccount with minimal RBAC
+      permissions following the principle of least privilege.
+
+      Fix: Create and assign a dedicated ServiceAccount:
+        spec:
+          serviceAccountName: my-app-sa
+    patterns:
+      - pattern: |
+          kind: Pod
+          ...
+          spec:
+            ...
+      - pattern-not: |
+          spec:
+            ...
+            serviceAccountName: $NAME
+            ...
+    metadata:
+      cwe: "CWE-250"
+      owasp: "A01:2021 - Broken Access Control"
+      category: "security"
+
+  - id: k8s-secret-in-env-value
+    languages: [yaml]
+    severity: ERROR
+    message: |
+      K8s Secret value hardcoded in environment variable (CWE-798).
+
+      Secret values should be injected via secretKeyRef, not hardcoded
+      in the Deployment manifest. Hardcoded values are visible in:
+        - Git history
+        - kubectl get deployment -o yaml
+        - Cluster backups
+
+      Fix: Use secretKeyRef:
+        env:
+          - name: DB_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: db-credentials
+                key: password
+    patterns:
+      - pattern: |
+          env:
+            - name: $NAME
+              value: $VALUE
+      - metavariable-regex:
+          metavariable: $NAME
+          regex: '(?i).*(PASSWORD|SECRET|TOKEN|API_KEY|PRIVATE_KEY|CREDENTIALS).*'
+      - pattern-not-inside: |
+          kind: ConfigMap
+          ...
+    metadata:
+      cwe: "CWE-798"
+      owasp: "A07:2021 - Identification and Authentication Failures"
+      category: "security"
+
+  # ==========================================================================
+  # GO: CROSS-NAMESPACE SECRET ACCESS (CWE-863)
+  # ==========================================================================
+
+  - id: rhoai-go-cross-namespace-secret-read
+    languages: [go]
+    severity: WARNING
+    message: |
+      Secret read with user-controlled namespace (CWE-863).
+
+      Reading a K8s Secret from a namespace derived from user input (CR spec
+      field, annotation, label) without validating the namespace allows
+      cross-namespace credential access.
+
+      Fix: Validate the namespace matches the CR's namespace:
+        if secretNS != cr.Namespace {
+          return fmt.Errorf("cross-namespace secret reference not allowed")
+        }
+    patterns:
+      - pattern-either:
+          - pattern: |
+              $NS = $OBJ.Spec.$FIELD
+              ...
+              $CLIENT.CoreV1().Secrets($NS).Get(...)
+          - pattern: |
+              $NS = $OBJ.Annotations[$KEY]
+              ...
+              $CLIENT.CoreV1().Secrets($NS).Get(...)
+    metadata:
+      cwe: "CWE-863"
+      owasp: "A01:2021 - Broken Access Control"
+      category: "security"
+
+  # ==========================================================================
+  # GO: IMPERSONATION WITHOUT VALIDATION (CWE-284)
+  # ==========================================================================
+
+  - id: rhoai-go-impersonation-from-user-input
+    languages: [go]
+    severity: ERROR
+    message: |
+      K8s API impersonation with user-controlled identity (CWE-284).
+
+      Setting ImpersonateUser or ImpersonateGroups from CR spec or annotations
+      allows privilege escalation. An attacker can set arbitrary values in a CR
+      to impersonate cluster-admin or any service account.
+
+      Fix: Never derive impersonation identity from CR spec or annotations.
+      Use a fixed, well-known identity if impersonation is needed.
+
+      Note: Impersonation from authenticated middleware (e.g., kubeflow-userid
+      headers set by kube-rbac-proxy/Istio after JWT validation) is NOT a
+      vulnerability. Only flag CR-derived or raw HTTP header sources.
+    patterns:
+      - pattern-either:
+          - pattern: |
+              $CONFIG.Impersonate.UserName = $OBJ.Spec.$FIELD
+          - pattern: |
+              $CONFIG.Impersonate.UserName = $OBJ.Annotations[$KEY]
+          - pattern: |
+              $CONFIG.Impersonate.UserName = $REQ.Header.Get($HEADER)
+          - pattern: |
+              $CONFIG.Impersonate.UserName = $REQ.FormValue($PARAM)
+    metadata:
+      cwe: "CWE-284"
+      owasp: "A01:2021 - Broken Access Control"
+      category: "security"

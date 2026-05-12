@@ -1,0 +1,581 @@
+# Semgrep Rules: ML Pipeline Security Patterns
+# Category: Patterns found through manual deep review of pipelines-components
+# Target: pipelines-components, AutoRAG, AutoML, finetuning pipelines
+# Created: 2026-04-10
+#
+# These rules detect security patterns that automated scanners missed
+# in the red-hat-data-services/pipelines-components deep review.
+# Each rule maps to a specific finding from the manual review.
+#
+# Coverage gaps addressed:
+#   - Zip Slip via tarfile (PY-002)
+#   - trust_remote_code arbitrary execution (PY-003)
+#   - SSL downgrade-on-error pattern (PY-004)
+#   - K8s API SSL bypass (PY-001)
+#   - PaC template variable false positive suppression
+#   - Unpinned git dependencies in pip install
+#   - curl|sh in Dockerfiles (extends rhoai-supply-chain.yaml)
+
+rules:
+  # ═══════════════════════════════════════════════════════════════════════
+  # ZIP SLIP: Unsafe tarfile extraction (PY-002)
+  # ═══════════════════════════════════════════════════════════════════════
+
+  - id: ml-pipeline-unsafe-tarfile-extractall
+    languages: [python]
+    severity: ERROR
+    message: |
+      Unsafe tarfile.extractall() without path validation (CWE-22, Zip Slip).
+
+      tarfile.extractall() does not validate member paths by default.
+      A crafted tar archive containing entries like "../../etc/cron.d/backdoor"
+      writes files outside the intended extraction directory. In ML pipelines
+      that process user-uploaded training data archives, this is a direct path
+      to arbitrary file write and potential RCE.
+
+      Found in: pipelines-components deep review (PY-002, HIGH)
+
+      Remediation (Python 3.12+):
+        tar.extractall(path, filter='data')
+
+      Remediation (older Python):
+        import os
+        for member in tar.getmembers():
+            member_path = os.path.join(extract_dir, member.name)
+            if not os.path.realpath(member_path).startswith(
+                os.path.realpath(extract_dir) + os.sep
+            ):
+                raise ValueError(f"Path traversal: {member.name}")
+        tar.extractall(extract_dir)
+    patterns:
+      - pattern-either:
+          - pattern: $TAR.extractall(...)
+          - pattern: tarfile.open(...).extractall(...)
+      - pattern-not: $TAR.extractall(..., filter="data", ...)
+      - pattern-not: $TAR.extractall(..., filter='data', ...)
+      - pattern-not: $TAR.extractall(..., filter="fully_trusted", ...)
+      - pattern-not: $TAR.extractall(..., filter='fully_trusted', ...)
+    paths:
+      exclude:
+        - "**/tests/**"
+        - "**/test_*.py"
+        - "**/*_test.py"
+    metadata:
+      cwe: "CWE-22"
+      owasp: "A01:2021 - Broken Access Control"
+      category: "security"
+      subcategory: [path-traversal, ml-pipeline]
+      confidence: HIGH
+      references:
+        - "https://docs.python.org/3/library/tarfile.html#tarfile.TarFile.extractall"
+        - "https://snyk.io/research/zip-slip-vulnerability"
+
+  - id: ml-pipeline-unsafe-tarfile-extract
+    languages: [python]
+    severity: ERROR
+    message: |
+      Unsafe tarfile.extract() without path validation (CWE-22, Zip Slip).
+
+      Individual tarfile.extract() calls can also write outside the target
+      directory if the member name contains path traversal sequences.
+
+      Remediation: Validate the member path before extraction:
+        member_path = os.path.realpath(os.path.join(dest, member.name))
+        if not member_path.startswith(os.path.realpath(dest) + os.sep):
+            raise ValueError(f"Path traversal: {member.name}")
+        tar.extract(member, dest)
+    patterns:
+      - pattern-either:
+          - pattern: $TAR.extract($MEMBER, ...)
+          - pattern: $TAR.extract($MEMBER)
+      - pattern-not: $TAR.extract($MEMBER, ..., filter="data", ...)
+      - pattern-not: $TAR.extract($MEMBER, ..., filter='data', ...)
+    paths:
+      exclude:
+        - "**/tests/**"
+        - "**/test_*.py"
+        - "**/*_test.py"
+    metadata:
+      cwe: "CWE-22"
+      owasp: "A01:2021 - Broken Access Control"
+      category: "security"
+      subcategory: [path-traversal, ml-pipeline]
+      confidence: HIGH
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # TRUST_REMOTE_CODE: Arbitrary code execution from model repos (PY-003)
+  # ═══════════════════════════════════════════════════════════════════════
+
+  - id: ml-pipeline-trust-remote-code
+    languages: [python]
+    severity: ERROR
+    message: |
+      trust_remote_code=True enables arbitrary code execution (CWE-94).
+
+      When loading a HuggingFace model with trust_remote_code=True, the
+      model repository's custom Python code (config.json, modeling_*.py)
+      is downloaded and executed in the local process. A poisoned model
+      repo (typosquat, compromised account, malicious fine-tune) runs
+      arbitrary code with full access to the pod's service account,
+      mounted secrets, and network.
+
+      Found in: pipelines-components deep review (PY-003, HIGH)
+
+      Remediation:
+        - Remove trust_remote_code=True entirely
+        - Use only models with native HuggingFace implementations
+        - If custom model code is required, maintain an explicit allowlist
+          of trusted model repositories and validate the repo hash before
+          loading
+    patterns:
+      - pattern-either:
+          - pattern: trust_remote_code=True
+          - pattern: |
+              "trust_remote_code": True
+    paths:
+      exclude:
+        - "**/tests/**"
+        - "**/test_*.py"
+        - "**/*_test.py"
+    metadata:
+      cwe: "CWE-94"
+      owasp: "A08:2021 - Software and Data Integrity Failures"
+      category: "security"
+      subcategory: [ml-pipeline, code-injection]
+      confidence: HIGH
+      references:
+        - "https://huggingface.co/docs/transformers/custom_models"
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # SSL DOWNGRADE: Catch SSLError, retry with verify=False (PY-004)
+  # ═══════════════════════════════════════════════════════════════════════
+
+  - id: ml-pipeline-ssl-downgrade-on-error
+    languages: [python]
+    severity: WARNING
+    message: |
+      SSL downgrade pattern: catches SSLError and retries without
+      certificate verification (CWE-757).
+
+      An attacker who can trigger a transient SSL error (via network
+      disruption, certificate rotation, or partial MITM) forces a
+      permanent downgrade to unverified HTTPS for the remainder of
+      the pipeline step. This enables full MITM on all subsequent
+      requests in that session.
+
+      For ML pipeline components that fetch training data or model
+      weights, this creates a data poisoning vector.
+
+      Found in: pipelines-components deep review (PY-004, MEDIUM)
+
+      Remediation:
+        - Never retry with verify=False after SSLError
+        - Instead, fail the request and surface the SSL error
+        - If connecting to services with known cert issues, inject a
+          CA bundle via ConfigMap and use verify='/path/to/ca-bundle.crt'
+    patterns:
+      - pattern-either:
+          - pattern: |
+              try:
+                  ...
+                  requests.$METHOD(..., verify=True, ...)
+                  ...
+              except (..., SSLError, ...):
+                  ...
+                  requests.$METHOD(..., verify=False, ...)
+                  ...
+          - pattern: |
+              try:
+                  ...
+                  requests.$METHOD(...)
+                  ...
+              except SSLError:
+                  ...
+                  requests.$METHOD(..., verify=False, ...)
+                  ...
+          - pattern: |
+              try:
+                  ...
+                  $SESSION.$METHOD(...)
+                  ...
+              except (..., SSLError, ...):
+                  ...
+                  $SESSION.verify = False
+                  ...
+    metadata:
+      cwe: "CWE-757"
+      owasp: "A07:2021 - Identification and Authentication Failures"
+      category: "security"
+      subcategory: [ml-pipeline, ssl-downgrade]
+      confidence: MEDIUM
+
+  # Catch httpx.Client(verify=False) pattern used in SSL downgrade retries
+  - id: ml-pipeline-httpx-verify-false
+    languages: [python]
+    severity: WARNING
+    message: |
+      httpx.Client created with verify=False (CWE-295).
+      This disables TLS certificate verification for all requests
+      through this client. Often used in SSL downgrade retry patterns.
+
+      Remediation: Use verify=True (default) or pass a CA bundle path.
+    patterns:
+      - pattern-either:
+          - pattern: httpx.Client(verify=False)
+          - pattern: httpx.Client(..., verify=False, ...)
+          - pattern: httpx.AsyncClient(verify=False)
+          - pattern: httpx.AsyncClient(..., verify=False, ...)
+    paths:
+      exclude:
+        - "**/tests/**"
+        - "**/test_*.py"
+        - "**/*_test.py"
+    metadata:
+      cwe: "CWE-295"
+      category: "security"
+      subcategory: [ml-pipeline, ssl-downgrade]
+      confidence: HIGH
+
+  # Catch S3 client with verify=False
+  - id: ml-pipeline-s3-verify-false
+    languages: [python]
+    severity: WARNING
+    message: |
+      S3 client created with verify=False (CWE-295).
+      This disables TLS verification for all S3 API calls, enabling
+      MITM attacks that can intercept or modify training data in transit.
+
+      Remediation: Use verify=True or pass a CA bundle path.
+    patterns:
+      - pattern-either:
+          - pattern: boto3.client("s3", ..., verify=False, ...)
+          - pattern: $FUNC(verify=False)
+    paths:
+      exclude:
+        - "**/tests/**"
+        - "**/test_*.py"
+        - "**/*_test.py"
+    metadata:
+      cwe: "CWE-295"
+      category: "security"
+      subcategory: [ml-pipeline, ssl-downgrade]
+      confidence: MEDIUM
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # K8S API SSL BYPASS (PY-001)
+  # ═══════════════════════════════════════════════════════════════════════
+
+  - id: ml-pipeline-k8s-ssl-bypass
+    languages: [python]
+    severity: ERROR
+    message: |
+      Kubernetes API client configured with SSL verification disabled
+      (CWE-295).
+
+      Disabling SSL verification for Kubernetes API calls exposes service
+      account tokens, secrets, and ConfigMap data to MITM attacks on the
+      pod network. A compromised sidecar or service mesh misconfiguration
+      allows interception of all K8s API traffic.
+
+      Found in: pipelines-components deep review (PY-001, HIGH)
+
+      Remediation: Use the in-cluster CA bundle:
+        from kubernetes import client, config
+        config.load_incluster_config()  # Automatically uses the SA CA bundle
+        # Or explicitly:
+        configuration = client.Configuration()
+        configuration.ssl_ca_cert = (
+            "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+        )
+    patterns:
+      - pattern-either:
+          # kubernetes-client library
+          - pattern: $CONFIG.verify_ssl = False
+          - pattern: Configuration(..., verify_ssl=False, ...)
+          - pattern: ApiClient(Configuration(..., verify_ssl=False, ...))
+          # requests-based K8s API calls
+          - pattern: requests.$METHOD(..., verify=False, ..., url=f"...kube...", ...)
+          - pattern: requests.$METHOD(..., verify=False, ..., url=f"...kubernetes...", ...)
+          - pattern: requests.$METHOD(..., verify=False, ..., url=f"...api/v1...", ...)
+    paths:
+      exclude:
+        - "**/tests/**"
+        - "**/test_*.py"
+        - "**/*_test.py"
+    metadata:
+      cwe: "CWE-295"
+      owasp: "A07:2021 - Identification and Authentication Failures"
+      category: "security"
+      subcategory: [ml-pipeline, kubernetes]
+      confidence: HIGH
+
+  # More general: verify_ssl=False on any K8s config object
+  - id: ml-pipeline-k8s-verify-ssl-false
+    languages: [python]
+    severity: ERROR
+    message: |
+      verify_ssl=False on Kubernetes client configuration (CWE-295).
+      This disables TLS verification for all K8s API calls through
+      this client, enabling MITM attacks on pod-to-apiserver traffic.
+
+      Remediation: Remove verify_ssl=False. Use load_incluster_config()
+      which automatically trusts the cluster CA.
+    pattern: verify_ssl=False
+    paths:
+      exclude:
+        - "**/tests/**"
+        - "**/test_*.py"
+        - "**/*_test.py"
+    metadata:
+      cwe: "CWE-295"
+      category: "security"
+      subcategory: [ml-pipeline, kubernetes]
+      confidence: HIGH
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # UNPINNED GIT DEPENDENCIES (SC-003)
+  # ═══════════════════════════════════════════════════════════════════════
+
+  - id: ml-pipeline-unpinned-git-dependency
+    languages: [generic]
+    severity: WARNING
+    message: |
+      pip install from git repository without pinned commit SHA (CWE-829).
+
+      Installing from @main, @master, @dev, or a mutable branch/tag means
+      the installed code changes with every build. A compromised upstream
+      repo or force-push to the branch silently changes what gets installed.
+
+      Found in: pipelines-components deep review (SC-003, HIGH)
+
+      Remediation: Pin to a specific commit SHA:
+        pip install git+https://github.com/org/repo@abc123def456
+      Or vendor the dependency.
+    patterns:
+      - pattern-regex: |
+          pip\s+install\s+[^\n]*git\+https?://[^\n]*@(main|master|dev|develop|HEAD)\b
+    paths:
+      exclude:
+        - "**/tests/**"
+        - "**/test_*.py"
+        - "**/*_test.py"
+    metadata:
+      cwe: "CWE-829"
+      owasp: "A08:2021 - Software and Data Integrity Failures"
+      category: "security"
+      subcategory: [supply-chain, ml-pipeline]
+      confidence: HIGH
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # CURL|SH IN DOCKERFILES (SC-001, extends rhoai-supply-chain.yaml)
+  # ═══════════════════════════════════════════════════════════════════════
+  # Note: rhoai-supply-chain.yaml already has supply-chain-curl-pipe-bash
+  # for generic files. This rule targets Dockerfile-specific patterns
+  # including the common "curl ... | sh" and "curl ... | bash" in RUN.
+
+  - id: ml-pipeline-dockerfile-curl-sh
+    languages: [dockerfile]
+    severity: ERROR
+    message: |
+      Dockerfile downloads and executes a remote script without integrity
+      verification (CWE-494).
+
+      The curl|sh pattern in a RUN instruction downloads code from a remote
+      URL and executes it as root during the build. A compromised CDN, DNS
+      hijack, or MITM on the build network injects arbitrary code into every
+      container image built from this Dockerfile.
+
+      Found in: pipelines-components deep review (SC-001, CRITICAL)
+
+      Remediation: Download, verify checksum, then execute:
+        RUN curl -LsSf https://example.com/install.sh -o /tmp/install.sh && \
+            echo "EXPECTED_SHA256  /tmp/install.sh" | sha256sum -c - && \
+            sh /tmp/install.sh && rm /tmp/install.sh
+
+      Or use the package manager:
+        RUN pip install uv==0.6.0
+    patterns:
+      - pattern-either:
+          - pattern: RUN ... curl ... | ... sh ...
+          - pattern: RUN ... curl ... | ... bash ...
+          - pattern: RUN ... wget ... | ... sh ...
+          - pattern: RUN ... wget ... | ... bash ...
+    metadata:
+      cwe: "CWE-494"
+      owasp: "A08:2021 - Software and Data Integrity Failures"
+      category: "security"
+      subcategory: [supply-chain, dockerfile]
+      confidence: HIGH
+
+  # Regex fallback for complex curl|sh patterns in Dockerfiles
+  - id: ml-pipeline-dockerfile-curl-sh-regex
+    languages: [generic]
+    severity: ERROR
+    message: |
+      Dockerfile RUN instruction pipes a remote download to shell (CWE-494).
+      See ml-pipeline-dockerfile-curl-sh for full description and remediation.
+    patterns:
+      - pattern-regex: |
+          RUN\s+.*(?:curl|wget)\s+[^\n|]+\|\s*(?:sudo\s+)?(?:ba)?sh
+    paths:
+      include:
+        - "**/Dockerfile*"
+        - "**/Containerfile*"
+    metadata:
+      cwe: "CWE-494"
+      category: "security"
+      subcategory: [supply-chain, dockerfile]
+      confidence: HIGH
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # PIPELINES-AS-CODE FALSE POSITIVE SUPPRESSION
+  # ═══════════════════════════════════════════════════════════════════════
+  # These rules do NOT detect vulnerabilities. They exist to document
+  # that PaC template variables are NOT credentials, reducing noise
+  # from the generic-hardcoded-secret rule.
+  #
+  # The actual fix is in the generic-hardcoded-secret rule's paths.exclude
+  # or in post-processing. These informational rules serve as documentation
+  # and can be used by the scanner to auto-dismiss matching findings.
+
+  - id: ml-pipeline-pac-template-variable-info
+    languages: [generic]
+    severity: INFO
+    message: |
+      Pipelines-as-Code template variable detected (not a credential).
+
+      The {{ variable }} syntax in .tekton/ YAML files is a PaC template
+      variable that resolves to a Kubernetes Secret NAME at runtime, not
+      a credential value. This is a false positive for hardcoded secret
+      detection rules.
+
+      Common PaC variables:
+        {{ git_auth_secret }} - Secret name for git authentication
+        {{ revision }}        - Git revision (commit SHA)
+        {{ repo_url }}        - Repository URL
+
+      Reference: https://pipelinesascode.com/docs/guide/authorizing-a-repository/
+    patterns:
+      - pattern-regex: |
+          (?:secret|token|password|key)\s*:\s*\{\{\s*\w+\s*\}\}
+    paths:
+      include:
+        - "**/.tekton/**"
+    metadata:
+      category: "info"
+      subcategory: [false-positive-suppression]
+      confidence: HIGH
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # UNSAFE ZIPFILE EXTRACTION (related to Zip Slip)
+  # ═══════════════════════════════════════════════════════════════════════
+
+  - id: ml-pipeline-unsafe-zipfile-extractall
+    languages: [python]
+    severity: ERROR
+    message: |
+      Unsafe zipfile.extractall() without path validation (CWE-22).
+
+      Similar to tarfile Zip Slip, zipfile.extractall() can write files
+      outside the intended directory if archive members contain path
+      traversal sequences. Python's zipfile module does NOT prevent this
+      by default.
+
+      Remediation:
+        for info in zip_file.infolist():
+            extract_path = os.path.realpath(
+                os.path.join(dest, info.filename)
+            )
+            if not extract_path.startswith(
+                os.path.realpath(dest) + os.sep
+            ):
+                raise ValueError(f"Path traversal: {info.filename}")
+        zip_file.extractall(dest)
+    patterns:
+      - pattern: $ZIP.extractall(...)
+      - metavariable-pattern:
+          metavariable: $ZIP
+          patterns:
+            - pattern-not: "..."
+    paths:
+      exclude:
+        - "**/tests/**"
+        - "**/test_*.py"
+        - "**/*_test.py"
+    metadata:
+      cwe: "CWE-22"
+      owasp: "A01:2021 - Broken Access Control"
+      category: "security"
+      subcategory: [path-traversal, ml-pipeline]
+      confidence: MEDIUM
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # HUGGINGFACE MODEL LOADING WITHOUT HASH VERIFICATION
+  # ═══════════════════════════════════════════════════════════════════════
+
+  - id: ml-pipeline-model-download-no-hash
+    languages: [python]
+    severity: WARNING
+    message: |
+      HuggingFace model downloaded without revision pinning (CWE-829).
+
+      Loading a model by name alone (e.g., from_pretrained("org/model"))
+      without specifying a revision hash means the model can change between
+      builds. A compromised model repo or account takeover silently changes
+      what gets loaded.
+
+      Remediation: Pin to a specific commit:
+        model = AutoModel.from_pretrained(
+            "org/model",
+            revision="abc123def456"  # Pin to specific commit
+        )
+    patterns:
+      - pattern-either:
+          - pattern: AutoModel.from_pretrained($MODEL_NAME)
+          - pattern: AutoModelForCausalLM.from_pretrained($MODEL_NAME)
+          - pattern: AutoModelForSeq2SeqLM.from_pretrained($MODEL_NAME)
+          - pattern: AutoTokenizer.from_pretrained($MODEL_NAME)
+          - pattern: pipeline($TASK, model=$MODEL_NAME)
+      - pattern-not: $CLS.from_pretrained(..., revision=..., ...)
+    paths:
+      exclude:
+        - "**/tests/**"
+        - "**/test_*.py"
+        - "**/*_test.py"
+        - "**/examples/**"
+        - "**/notebooks/**"
+    metadata:
+      cwe: "CWE-829"
+      owasp: "A08:2021 - Software and Data Integrity Failures"
+      category: "security"
+      subcategory: [ml-pipeline, supply-chain]
+      confidence: LOW
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # DOCKERFILE: NO USER DIRECTIVE (runs as root)
+  # ═══════════════════════════════════════════════════════════════════════
+
+  - id: ml-pipeline-dockerfile-no-user
+    languages: [dockerfile]
+    severity: WARNING
+    message: |
+      Dockerfile has no USER directive (CWE-250).
+
+      Containers run as root by default. If the application is compromised,
+      the attacker has root access inside the container, making container
+      escape and privilege escalation easier.
+
+      Remediation: Add a non-root user:
+        RUN useradd -r -s /bin/false appuser
+        USER appuser
+    patterns:
+      - pattern: FROM $IMAGE
+      - pattern-not-inside: |
+          FROM $IMAGE
+          ...
+          USER $USER
+    metadata:
+      cwe: "CWE-250"
+      category: "security"
+      subcategory: [dockerfile]
+      confidence: LOW

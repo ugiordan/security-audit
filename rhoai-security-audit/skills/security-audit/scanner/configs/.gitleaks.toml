@@ -1,0 +1,63 @@
+# Centralized Gitleaks Configuration for RHOAI Security Scanner
+# This file is copied into each repo before scanning by scan-repo.sh.
+# It extends gitleaks' default ruleset with path exclusions for known false positives.
+
+title = "RHOAI Gitleaks Config"
+
+[allowlist]
+  description = "Global allowlist for RHOAI repos"
+
+  # Path regex patterns to exclude from scanning
+  paths = [
+    # detect-secrets baseline files (contain hashed secret references, not actual secrets)
+    '''\.secrets\.baseline$''',
+
+    # Example, demo, sample, and contributed directories (not production code)
+    '''(^|/)examples/''',
+    '''(^|/)example/''',
+    '''(^|/)demos/''',
+    '''(^|/)demo/''',
+    '''(^|/)samples/''',
+    '''(^|/)sample/''',
+    '''(^|/)contrib/''',
+    '''(^|/)hack/''',
+    '''(^|/)scripts/templates/''',
+
+    # Test directories and files
+    '''(^|/)testdata/''',
+    '''(^|/)tests/''',
+    '''(^|/)test/''',
+    '''(^|/)__tests__/''',
+    '''(^|/)testing/''',
+    '''(^|/)spec/''',
+    '''(^|/)fixtures/''',
+    '''_test\.go$''',
+    '''_test\.py$''',
+
+    # Documentation with example curl commands / API keys
+    '''(^|/)docs/.*\.md$''',
+    '''README\.md$''',
+
+    # Kubernetes sample manifests with placeholder secrets
+    '''(^|/)config/samples/''',
+    '''(^|/)docs/samples/''',
+
+    # Vendor and build directories (third-party code, not our secrets)
+    '''(^|/)vendor/''',
+    '''(^|/)dist/''',
+    '''(^|/)build/''',
+    '''(^|/)node_modules/''',
+
+    # Generated/lock files (high noise, no real secrets)
+    '''package-lock\.json$''',
+    '''go\.sum$''',
+
+    # NVIDIA CUDA Dockerfile GPG key fingerprints (not secrets)
+    '''(^|/)base-images/cuda/''',
+
+    # Test key/cert files
+    '''localhost\.(key|crt)$''',
+    '''test-.*\.(pem|key)$''',
+    '''dummy-.*\.key$''',
+    '''mock-.*\.pem$''',
+  ]

@@ -1,0 +1,28 @@
+# RHOAI Security Scanner — yamllint config
+# Focus on security-relevant YAML issues, not formatting/style.
+---
+extends: default
+
+rules:
+  # Disabled: pure formatting, not security-relevant
+  indentation: disable
+  line-length: disable
+  braces: disable
+  brackets: disable
+  comments: disable
+  comments-indentation: disable
+  empty-lines: disable
+  trailing-spaces: disable
+  new-line-at-end-of-file: disable
+  new-lines: disable
+  hyphens: disable
+  colons: disable
+  commas: disable
+  octal-values: disable
+
+  # Enabled: these catch real issues
+  document-start: disable          # not a security concern
+  document-end: disable            # not a security concern
+  empty-values: enable             # may indicate missing config
+  key-duplicates: enable           # duplicate keys silently override — real bug
+  truthy: disable                  # unquoted yes/no — kube-linter/semgrep catch security-relevant cases

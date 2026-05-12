@@ -1,0 +1,29 @@
+# OSV-Scanner configuration for rhoai-security-scanner
+# Reduces noise from dev-only dependencies and non-actionable advisories.
+
+# Packages to ignore (dev-only dependencies that are not in production builds)
+# These show up in lockfiles but don't ship in container images.
+[[PackageOverrides]]
+name = "setuptools"
+ecosystem = "PyPI"
+reason = "Build-time dependency only, not shipped in production images"
+ignore = true
+
+[[PackageOverrides]]
+name = "pip"
+ecosystem = "PyPI"
+reason = "Package manager, not shipped in production container images"
+ignore = true
+
+[[PackageOverrides]]
+name = "wheel"
+ecosystem = "PyPI"
+reason = "Build-time wheel packaging tool, not a runtime dependency"
+ignore = true
+
+# Ignore specific non-actionable vulnerabilities
+# Add entries here as false positives are identified during triage.
+# Format:
+# [[IgnoredVulns]]
+# id = "CVE-YYYY-NNNNN"
+# reason = "Brief explanation"

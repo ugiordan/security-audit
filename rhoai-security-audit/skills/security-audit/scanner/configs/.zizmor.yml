@@ -1,0 +1,56 @@
+# Zizmor configuration for RHOAI Security Scanner
+# Tuned for scanning upstream repos we don't own: disable rules that
+# flag best-practice issues we can't fix (checkout defaults, permissions
+# blocks, environment-based secrets). Keep rules that detect real
+# injection, supply-chain, and cache-poisoning attack vectors.
+#
+# Docs: https://docs.zizmor.sh/configuration/
+
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        # First-party GitHub actions: ref-pin is acceptable
+        # (maintained by GitHub, tagged releases are trustworthy)
+        actions/*: ref-pin
+        github/*: ref-pin
+
+        # All other actions require hash-pinning
+        "*": hash-pin
+
+  # Disable: flags checkout without persist-credentials: false.
+  # We scan repos we don't own, can't add this to every checkout step.
+  artipacked:
+    disable: true
+
+  # Disable: using secrets in with: vs env: is not a vulnerability.
+  # The secret value doesn't appear in logs either way.
+  secrets-outside-env:
+    disable: true
+
+  # Disable: missing explicit permissions: blocks. Noisy best-practice
+  # finding, not a vulnerability. Many repos set permissions at org level.
+  excessive-permissions:
+    disable: true
+
+  # Disable: calling reusable workflows with secrets: inherit is normal.
+  # The called workflow is in the same repo/org.
+  secrets-inherit:
+    disable: true
+
+  # Disable: informational findings with no security impact.
+  superfluous-actions:
+    disable: true
+  obfuscation:
+    disable: true
+  use-trusted-publishing:
+    disable: true
+  archived-uses:
+    disable: true
+
+  # Disable: template injection detection is covered more precisely by
+  # semgrep's github-actions-script-injection rule, which distinguishes
+  # between safe fields (github.event.number) and dangerous ones
+  # (github.event.pull_request.title). Zizmor flags all ${{ }} usage.
+  template-injection:
+    disable: true

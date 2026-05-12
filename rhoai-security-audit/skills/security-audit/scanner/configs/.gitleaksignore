@@ -1,0 +1,8 @@
+# RHOAI Centralized .gitleaksignore
+# This file contains specific finding fingerprints to suppress.
+# Path-based exclusions are in .gitleaks.toml (allowlist.paths).
+#
+# Format: each line is a gitleaks finding fingerprint
+# (commit:file:rule:line format from gitleaks JSON output)
+#
+# Last updated: 2026-03-19

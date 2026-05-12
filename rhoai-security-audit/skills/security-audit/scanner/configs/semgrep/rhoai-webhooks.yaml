@@ -1,0 +1,127 @@
+# Semgrep Rules: RHOAI Webhook Security
+# Category: Admission webhooks (validating, mutating)
+# Target: Go code implementing Kubernetes webhooks
+#
+# Detects security issues in webhook implementations:
+# - Missing validation in admission webhooks
+# - Webhook bypass vulnerabilities
+
+rules:
+  # ═══════════════════════════════════════════════════════════════════════
+  # Rule 1: Missing Validation in Admission Webhook
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: rhoai-webhook-missing-validation
+    patterns:
+      # Webhook handler function
+      - pattern-either:
+          # ValidatingWebhook interface
+          - pattern-inside: |
+              func ($RECV *$HANDLER) ValidateCreate($CTX context.Context, $OBJ runtime.Object) error {
+                ...
+              }
+          - pattern-inside: |
+              func ($RECV *$HANDLER) ValidateUpdate($CTX context.Context, $OLD runtime.Object, $NEW runtime.Object) error {
+                ...
+              }
+          # MutatingWebhook interface
+          - pattern-inside: |
+              func ($RECV *$HANDLER) Default($CTX context.Context, $OBJ runtime.Object) error {
+                ...
+              }
+      # Returns nil (allows all requests)
+      - pattern: |
+          return nil
+      # No validation logic before return
+      - pattern-not-inside: |
+          if $CONDITION { ... }
+          ...
+          return nil
+      - pattern-not-inside: |
+          if err := validate($OBJ); err != nil { ... }
+          ...
+          return nil
+    message: |
+      Admission webhook returns nil without performing validation.
+
+      VULNERABILITY: Webhooks that always return nil bypass security controls,
+      allowing users to create invalid or malicious Custom Resources.
+
+      ATTACK SCENARIO:
+      1. Webhook deployed to validate InferenceService CRs
+      2. Webhook returns nil without checking spec fields
+      3. User creates CR with malicious configuration
+      4. Invalid CR bypasses validation and gets created
+      5. Operator processes malicious CR (e.g., runs untrusted container image)
+
+      EXAMPLE VULNERABLE CODE:
+      ```go
+      func (v *InferenceServiceValidator) ValidateCreate(ctx context.Context, obj runtime.Object) error {
+          // TODO: Add validation logic
+          return nil  // ❌ DANGEROUS: Allows all requests
+      }
+      ```
+
+      REMEDIATION:
+      Implement comprehensive validation:
+
+      ```go
+      func (v *InferenceServiceValidator) ValidateCreate(ctx context.Context, obj runtime.Object) error {
+          svc, ok := obj.(*aiv1.InferenceService)
+          if !ok {
+              return fmt.Errorf("expected InferenceService, got %T", obj)
+          }
+
+          // Validate required fields
+          if svc.Spec.ModelName == "" {
+              return fmt.Errorf("spec.modelName is required")
+          }
+
+          // Validate model name format
+          if !regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`).MatchString(svc.Spec.ModelName) {
+              return fmt.Errorf("invalid modelName format")
+          }
+
+          // Validate container image (if user-provided)
+          if svc.Spec.Image != "" {
+              if !strings.HasPrefix(svc.Spec.Image, "quay.io/rhoai/") {
+                  return fmt.Errorf("only images from quay.io/rhoai/ are allowed")
+              }
+          }
+
+          // Validate resource limits
+          if svc.Spec.Resources.Limits.Memory().Value() > 64*1024*1024*1024 {
+              return fmt.Errorf("memory limit exceeds 64Gi")
+          }
+
+          // Validate no privileged containers
+          if svc.Spec.SecurityContext != nil && svc.Spec.SecurityContext.Privileged {
+              return fmt.Errorf("privileged containers are not allowed")
+          }
+
+          return nil  // ✅ Only after validation passes
+      }
+      ```
+
+      VALIDATION CHECKLIST (Admission Webhooks):
+      - [ ] Required fields are present
+      - [ ] Field formats match expected patterns
+      - [ ] Resource limits are within bounds
+      - [ ] Container images from trusted registries only
+      - [ ] No privileged security contexts
+      - [ ] No hostPath volumes
+      - [ ] No wildcard RBAC permissions
+      - [ ] Reject requests that fail validation
+
+      REFERENCES:
+      - Kubernetes Admission Controllers Best Practices
+      - CWE-20: Improper Input Validation
+    severity: ERROR
+    languages: [go]
+    metadata:
+      category: security
+      technology: [kubernetes, webhook]
+      cwe: "CWE-20"
+      confidence: MEDIUM
+      likelihood: HIGH
+      impact: HIGH
+      subcategory: [vuln]

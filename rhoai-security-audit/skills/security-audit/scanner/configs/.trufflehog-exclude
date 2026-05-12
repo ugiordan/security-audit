@@ -1,0 +1,57 @@
+# TruffleHog path exclusions for RHOAI Security Scanner
+# One regex per line. Matched against file paths.
+# ONLY exclude paths where secrets are expected to be fake/test data.
+
+# Test directories and files (test code, not shipped)
+testdata/
+tests/
+test/
+__tests__/
+fixtures/
+_test\.go$
+_test\.py$
+
+# Documentation directories (contain example configs, generated data, not secrets)
+(^|/)docs/
+(^|/)doc/
+
+# Example, demo, sample, and contributed directories (not production code)
+(^|/)examples/
+(^|/)example/
+(^|/)demos/
+(^|/)demo/
+(^|/)samples/
+(^|/)sample/
+(^|/)contrib/
+(^|/)hack/
+(^|/)scripts/templates/
+
+# Vendor directories (third-party code, not our secrets)
+(^|/)vendor/
+
+# detect-secrets baselines (contain hashed references, not secrets)
+\.secrets\.baseline$
+
+# Test key/cert file naming patterns (intentionally fake credentials)
+localhost\.(key|crt)$
+test-.*\.(pem|key)$
+dummy-.*\.key$
+mock-.*\.(pem|key)$
+
+# Changelog files (commit SHAs trigger GitHubOauth2 detector FPs)
+CHANGELOG
+CHANGES
+
+# ML model binary files (trigger Box detector FPs)
+\.pdmodel$
+\.pdparams$
+\.onnx$
+\.pb$
+
+# Generated/minified files (no meaningful secrets, high noise)
+\.min\.js$
+\.min\.css$
+(^|/)dist/
+(^|/)build/
+package-lock\.json$
+go\.sum$

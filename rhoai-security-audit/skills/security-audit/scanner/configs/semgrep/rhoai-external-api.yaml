@@ -1,0 +1,265 @@
+# Semgrep Rules: RHOAI External API Integration Security
+# Category: External API calls (NVIDIA NIM, model registries, cloud APIs)
+# Target: Go code in operators and controllers
+#
+# Detects security issues in external API integration patterns:
+# - Unbounded HTTP response reads (memory exhaustion)
+# - Unvalidated JSON unmarshaling (malicious data injection)
+# - Insecure TLS configuration (MITM attacks)
+
+rules:
+  # ═══════════════════════════════════════════════════════════════════════
+  # Rule 1: Unbounded HTTP Response Read
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: rhoai-unbounded-http-response
+    pattern-either:
+      - pattern: io.ReadAll($RESP.Body)
+      - pattern: ioutil.ReadAll($RESP.Body)
+    message: |
+      Unbounded HTTP response read without size limit.
+
+      VULNERABILITY: Malicious or compromised external APIs can send unlimited
+      data, exhausting controller memory and causing OOM crashes.
+
+      AFFECTED COMPONENTS:
+      - NVIDIA NIM API integration
+      - Model registry clients
+      - External authentication services
+      - Cloud provider APIs
+
+      REMEDIATION:
+      Use io.LimitReader to enforce maximum response size:
+
+      ```go
+      // BEFORE (VULNERABLE):
+      body, err := io.ReadAll(resp.Body)
+
+      // AFTER (SECURE):
+      maxSize := int64(10 * 1024 * 1024) // 10 MB
+      body, err := io.ReadAll(io.LimitReader(resp.Body, maxSize))
+      if int64(len(body)) == maxSize {
+          return fmt.Errorf("response exceeded maximum size of %d bytes", maxSize)
+      }
+      ```
+
+      REFERENCES:
+      - CWE-400: Uncontrolled Resource Consumption
+      - OWASP: Denial of Service via Resource Exhaustion
+    severity: WARNING
+    languages: [go]
+    metadata:
+      category: security
+      technology: [http, api]
+      cwe: "CWE-400"
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      subcategory: [vuln]
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # Rule 2: Unvalidated JSON Unmarshal to Kubernetes Resources
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: rhoai-unvalidated-json-to-k8s-resource
+    patterns:
+      - pattern-either:
+          # JSON unmarshal
+          - pattern: json.Unmarshal($BODY, &$VAR)
+          # YAML unmarshal (also accepts JSON)
+          - pattern: yaml.Unmarshal($BODY, &$VAR)
+      - pattern-either:
+          # Storage in ConfigMap
+          - pattern-inside: |
+              $CM := &corev1.ConfigMap{...}
+              ...
+              $CLIENT.Create(..., $CM)
+          # Storage in Secret
+          - pattern-inside: |
+              $SECRET := &corev1.Secret{...}
+              ...
+              $CLIENT.Create(..., $SECRET)
+          # Direct client operations
+          - pattern-inside: |
+              json.Unmarshal($BODY, &$VAR)
+              ...
+              $CLIENT.Create($CTX, $VAR)
+          - pattern-inside: |
+              json.Unmarshal($BODY, &$VAR)
+              ...
+              $CLIENT.Update($CTX, $VAR)
+    message: |
+      JSON/YAML unmarshaled from external source stored in cluster without validation.
+
+      VULNERABILITY: External APIs can inject malicious data into ConfigMaps/Secrets,
+      leading to privilege escalation, data exfiltration, or cluster compromise.
+
+      EXAMPLE ATTACK (NVIDIA NIM API):
+      1. Attacker compromises NIM API or MITM connection
+      2. API returns malicious JSON with embedded commands/secrets
+      3. Controller unmarshals data without validation
+      4. Malicious data stored in ConfigMap mounted to pods
+      5. Attacker gains code execution in user workloads
+
+      AFFECTED COMPONENTS:
+      - Model metadata synchronization
+      - External config fetching
+      - Runtime parameter updates
+      - Inference endpoint configuration
+
+      REMEDIATION:
+      Add validation before storage:
+
+      ```go
+      // BEFORE (VULNERABLE):
+      var modelConfig ModelConfig
+      json.Unmarshal(responseBody, &modelConfig)
+      cm := &corev1.ConfigMap{
+          Data: map[string]string{
+              "config": modelConfig.Config,  // ❌ No validation
+          },
+      }
+      client.Create(ctx, cm)
+
+      // AFTER (SECURE):
+      var modelConfig ModelConfig
+      json.Unmarshal(responseBody, &modelConfig)
+
+      // Validate all fields
+      if len(modelConfig.Config) > 1024*1024 {
+          return fmt.Errorf("config exceeds 1MB limit")
+      }
+      if !regexp.MustCompile(`^[a-zA-Z0-9._-]+$`).MatchString(modelConfig.Name) {
+          return fmt.Errorf("invalid characters in name")
+      }
+      if strings.Contains(modelConfig.Config, "$(") {
+          return fmt.Errorf("shell expansion detected in config")
+      }
+
+      cm := &corev1.ConfigMap{
+          Data: map[string]string{
+              "config": modelConfig.Config,  // ✅ Validated
+          },
+      }
+      client.Create(ctx, cm)
+      ```
+
+      VALIDATION CHECKLIST:
+      - [ ] Length limits (prevent resource exhaustion)
+      - [ ] Character allowlists (prevent injection)
+      - [ ] Format validation (regex patterns)
+      - [ ] No shell metacharacters ($, `, |, ;, &)
+      - [ ] No path traversal (../)
+      - [ ] No sensitive data patterns (API keys, tokens)
+
+      REFERENCES:
+      - CWE-20: Improper Input Validation
+      - CWE-502: Deserialization of Untrusted Data
+    severity: ERROR
+    languages: [go]
+    metadata:
+      category: security
+      technology: [kubernetes, json, api]
+      cwe: "CWE-20"
+      confidence: HIGH
+      likelihood: HIGH
+      impact: CRITICAL
+      subcategory: [vuln]
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # Rule 3: Insecure TLS Configuration for External APIs
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: rhoai-insecure-tls-external-api
+    patterns:
+      - pattern-either:
+          # http.Client with InsecureSkipVerify
+          - pattern: |
+              &http.Client{
+                Transport: &http.Transport{
+                  TLSClientConfig: &tls.Config{
+                    InsecureSkipVerify: true,
+                    ...
+                  },
+                  ...
+                },
+                ...
+              }
+          # Standalone TLS config
+          - pattern: |
+              &tls.Config{
+                InsecureSkipVerify: true,
+                ...
+              }
+      # Only flag if used for external APIs (has http.NewRequest or similar)
+      - pattern-inside: |
+          func $FUNC(...) {
+            ...
+            http.NewRequest(...)
+            ...
+          }
+    message: |
+      Insecure TLS configuration (InsecureSkipVerify: true) for external API calls.
+
+      VULNERABILITY: Disabling TLS certificate verification allows MITM attacks,
+      enabling attackers to intercept API credentials and inject malicious responses.
+
+      ATTACK SCENARIO:
+      1. Operator connects to external API (e.g., NVIDIA NIM)
+      2. Network attacker performs MITM with self-signed cert
+      3. InsecureSkipVerify=true bypasses cert validation
+      4. Attacker intercepts API tokens and injects fake responses
+
+      REMEDIATION:
+      Use proper TLS configuration with certificate validation:
+
+      ```go
+      // BEFORE (VULNERABLE):
+      client := &http.Client{
+          Transport: &http.Transport{
+              TLSClientConfig: &tls.Config{
+                  InsecureSkipVerify: true,  // ❌ DANGEROUS
+              },
+          },
+      }
+
+      // AFTER (SECURE - Option 1: System CA pool):
+      client := &http.Client{
+          Transport: &http.Transport{
+              TLSClientConfig: &tls.Config{
+                  MinVersion: tls.VersionTLS12,
+                  // Uses system CA certificates by default
+              },
+          },
+      }
+
+      // AFTER (SECURE - Option 2: Custom CA for private APIs):
+      caCert, _ := os.ReadFile("/etc/ssl/certs/custom-ca.pem")
+      caCertPool := x509.NewCertPool()
+      caCertPool.AppendCertsFromPEM(caCert)
+
+      client := &http.Client{
+          Transport: &http.Transport{
+              TLSClientConfig: &tls.Config{
+                  RootCAs:    caCertPool,
+                  MinVersion: tls.VersionTLS12,
+              },
+          },
+      }
+      ```
+
+      ACCEPTABLE USE CASES (requires explicit justification):
+      - Development/testing environments (never production)
+      - Documented workaround for legacy systems (with mitigation plan)
+      - User explicitly opted in via configuration flag
+
+      REFERENCES:
+      - CWE-295: Improper Certificate Validation
+      - OWASP: M3 Insecure Communication
+    severity: ERROR
+    languages: [go]
+    metadata:
+      category: security
+      technology: [tls, https, api]
+      cwe: "CWE-295"
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      subcategory: [vuln]

@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Run SAST scan with all tools + tuned configs from rhoai-security-scanner.
-# Downloads missing tool binaries and scan-repo.sh on first run.
-# No container, no system modification.
+# Run SAST scan with all tools + tuned configs bundled in the skill.
+# Downloads missing tool binaries on first run. No container needed.
 #
 # Usage: scan_container.sh <org/repo> <branch> <results-dir>
 set -euo pipefail
@@ -13,16 +12,16 @@ REPO_SHORT="${REPO##*/}"
 
 RESULTS_DIR="$(mkdir -p "${RESULTS_DIR}" && cd "${RESULTS_DIR}" && pwd)"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SKILL_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-# Install missing tools + clone scanner repo (cached between runs)
-# Save and clear positional args so install_tools.sh doesn't inherit them
+# Install missing tools (cached between runs)
 _SAVED_ARGS=("$@")
 set --
 source "${SCRIPT_DIR}/install_tools.sh"
 set -- "${_SAVED_ARGS[@]}"
 
-# Use scan-repo.sh from the scanner repo (has all tuned configs and exclusions)
-SCAN_SCRIPT="${SCANNER_REPO_DIR}/scripts/scan-repo.sh"
+# Use scan-repo.sh bundled with the skill (includes tuned configs)
+SCAN_SCRIPT="${SKILL_DIR}/scanner/scripts/scan-repo.sh"
 
 if [ -f "${SCAN_SCRIPT}" ]; then
   MOUNT_DIR="$(mktemp -d)"
@@ -32,7 +31,7 @@ if [ -f "${SCAN_SCRIPT}" ]; then
   fi
   rm -rf "${MOUNT_DIR}"
 else
-  echo "WARNING: scan-repo.sh not found. Running with default configs (no tuning)."
+  echo "WARNING: scan-repo.sh not found at ${SCAN_SCRIPT}. Using run_all.sh (no tuning)."
   bash "${SCRIPT_DIR}/run_all.sh" "${REPO}" "${BRANCH}" "${RESULTS_DIR}"
 fi
 

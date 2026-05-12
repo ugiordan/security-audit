@@ -1,0 +1,198 @@
+# Semgrep Rules: Supply Chain Attack Detection
+# Category: Obfuscation, persistence, and lateral movement patterns
+# Target: All RHOAI components
+#
+# Detects patterns associated with supply chain attacks like the
+# litellm/Trivy compromise (March 2025):
+# - Base64-encoded code execution (obfuscation)
+# - .pth file persistence mechanism
+# - Subprocess execution of decoded payloads
+# - Unsafe remote script execution (curl | bash)
+# - K8s service account token access from application code
+
+rules:
+  # ═══════════════════════════════════════════════════════════════════════
+  # Rule 1: Base64-Encoded Code Execution
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: supply-chain-base64-exec
+    patterns:
+      - pattern-either:
+          - pattern: exec(base64.b64decode($X))
+          - pattern: exec(base64.b64decode($X).decode(...))
+          - pattern: eval(base64.b64decode($X))
+          - pattern: eval(base64.b64decode($X).decode(...))
+          - pattern: |
+              $DECODED = base64.b64decode($X)
+              ...
+              exec($DECODED)
+          - pattern: |
+              $DECODED = base64.b64decode($X).decode(...)
+              ...
+              exec($DECODED)
+          - pattern: |
+              $DECODED = base64.b64decode($X)
+              ...
+              eval($DECODED)
+          - pattern: |
+              $DECODED = base64.b64decode($X).decode(...)
+              ...
+              eval($DECODED)
+    message: |
+      Base64-encoded code execution detected. This pattern is a strong
+      indicator of obfuscated malicious code, as seen in the litellm supply
+      chain attack (March 2025) where `exec(base64.b64decode(...))` was used
+      to hide credential-stealing and lateral movement payloads.
+
+      REMEDIATION: Remove the base64 obfuscation. Legitimate code should
+      not need to decode and execute base64-encoded Python at runtime.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      category: security
+      subcategory: [supply-chain]
+      cwe: ["CWE-506: Embedded Malicious Code"]
+      confidence: HIGH
+      technology: [python]
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # Rule 2: Python .pth File Manipulation
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: supply-chain-pth-file-manipulation
+    patterns:
+      - pattern-either:
+          - pattern: open($PATH, "w")
+          - pattern: open($PATH, "a")
+          - pattern: open($PATH, "wb")
+          - pattern: $P.write_text(...)
+          - pattern: $P.open("w")
+      - metavariable-regex:
+          metavariable: $PATH
+          regex: .*\.pth['"]
+    paths:
+      exclude:
+        - "**/setup.py"
+        - "**/setup.cfg"
+        - "**/pyproject.toml"
+        - "**/tests/**"
+        - "**/test_*"
+    message: |
+      Creation or modification of a .pth file detected. Python .pth files in
+      site-packages are automatically executed at interpreter startup, making
+      them a persistence mechanism used in supply chain attacks.
+
+      In the litellm compromise, a .pth file was placed in site-packages
+      to ensure the malicious payload ran on every Python invocation.
+
+      REMEDIATION: .pth file manipulation is rarely legitimate in application
+      code. If this is a packaging tool, add a semgrep ignore comment.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      category: security
+      subcategory: [supply-chain]
+      cwe: ["CWE-506: Embedded Malicious Code"]
+      confidence: HIGH
+      technology: [python]
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # Rule 3: Subprocess Execution of Decoded/Dynamic Python Code
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: supply-chain-subprocess-decoded-exec
+    patterns:
+      - pattern-either:
+          - pattern: subprocess.Popen([..., "-c", $CODE], ...)
+          - pattern: subprocess.run([..., "-c", $CODE], ...)
+          - pattern: subprocess.call([..., "-c", $CODE], ...)
+          - pattern: subprocess.Popen([sys.executable, "-c", ...], ...)
+          - pattern: subprocess.run([sys.executable, "-c", ...], ...)
+          - pattern: subprocess.call([sys.executable, "-c", ...], ...)
+      - pattern-not: subprocess.run(["python", "-c", "..."], ...)
+      - pattern-not: subprocess.Popen(["python", "-c", "..."], ...)
+      - pattern-not: subprocess.call(["python", "-c", "..."], ...)
+    paths:
+      exclude:
+        - "**/tests/**"
+        - "**/test_*"
+    message: |
+      Subprocess execution with `-c` flag using dynamic content detected.
+      This pattern spawns a Python interpreter to execute code passed as a
+      string, which is a common evasion technique in supply chain attacks.
+
+      In the litellm compromise, `subprocess.Popen([sys.executable, "-c",
+      decoded_payload])` was used to execute base64-decoded commands in a
+      child process to evade detection.
+
+      REMEDIATION: Use direct function calls or importlib instead of spawning
+      subprocess with `-c`. If subprocess is truly needed, use a script file
+      rather than inline code.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      category: security
+      subcategory: [supply-chain]
+      cwe: ["CWE-78: OS Command Injection", "CWE-506: Embedded Malicious Code"]
+      confidence: MEDIUM
+      technology: [python]
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # Rule 4: Unsafe Remote Script Execution (curl | bash)
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: supply-chain-curl-pipe-bash
+    patterns:
+      - pattern-regex: (curl|wget)\s+[^\n|]+\|\s*(sudo\s+)?(ba)?sh
+    paths:
+      exclude:
+        - "**/vendor/**"
+        - "**/third_party/**"
+    message: |
+      Unsafe remote script execution detected (curl/wget piped to shell).
+      This pattern downloads and executes code from a remote URL without
+      verification, creating a supply chain attack vector.
+
+      REMEDIATION: Download the script first, verify its checksum or
+      signature, then execute it:
+        curl -o install.sh https://example.com/install.sh
+        sha256sum -c install.sh.sha256
+        bash install.sh
+    languages: [generic]
+    severity: WARNING
+    metadata:
+      category: security
+      subcategory: [supply-chain]
+      cwe: ["CWE-829: Inclusion of Functionality from Untrusted Control Sphere"]
+      confidence: MEDIUM
+      technology: [generic]
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # Rule 5: K8s Service Account Token File Access
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: supply-chain-k8s-token-file-read
+    patterns:
+      - pattern-either:
+          - pattern: open("/var/run/secrets/kubernetes.io/serviceaccount/token", ...)
+          - pattern: open("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt", ...)
+          - pattern: $P("/var/run/secrets/kubernetes.io/serviceaccount/token")
+          - pattern: $P("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt")
+    paths:
+      exclude:
+        - "**/tests/**"
+        - "**/test_*"
+    message: |
+      Direct file read of Kubernetes service account token detected.
+      Application code should use the official Kubernetes client library
+      (kubernetes.client) instead of reading token files directly.
+
+      In supply chain attacks, malicious code reads the SA token to
+      perform lateral movement within the K8s cluster.
+
+      REMEDIATION: Use the official kubernetes-client library:
+        from kubernetes import client, config
+        config.load_incluster_config()
+    languages: [python]
+    severity: ERROR
+    metadata:
+      category: security
+      subcategory: [supply-chain]
+      cwe: ["CWE-522: Insufficiently Protected Credentials"]
+      confidence: HIGH
+      technology: [python]

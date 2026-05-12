@@ -1,0 +1,305 @@
+# Semgrep Rules: RHOAI Core Security Patterns
+# Category: Cross-component security rules (RBAC, secrets, logging)
+# Target: All RHOAI components
+#
+# Detects security issues common across all components:
+# - Wildcard RBAC permissions
+# - Secrets in logs
+
+rules:
+  # ═══════════════════════════════════════════════════════════════════════
+  # Rule 1: Wildcard RBAC Permissions
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: rhoai-wildcard-rbac
+    patterns:
+      # RBAC manifest files
+      - pattern-either:
+          # ClusterRole with wildcards
+          - pattern: |
+              apiVersion: rbac.authorization.k8s.io/v1
+              kind: ClusterRole
+              metadata: ...
+              rules:
+                - apiGroups: ["*"]
+                  resources: ...
+                  verbs: ...
+          - pattern: |
+              apiVersion: rbac.authorization.k8s.io/v1
+              kind: ClusterRole
+              metadata: ...
+              rules:
+                - apiGroups: ...
+                  resources: ["*"]
+                  verbs: ...
+          - pattern: |
+              apiVersion: rbac.authorization.k8s.io/v1
+              kind: ClusterRole
+              metadata: ...
+              rules:
+                - apiGroups: ...
+                  resources: ...
+                  verbs: ["*"]
+          # Role with wildcards
+          - pattern: |
+              apiVersion: rbac.authorization.k8s.io/v1
+              kind: Role
+              metadata: ...
+              rules:
+                - apiGroups: ["*"]
+                  resources: ...
+                  verbs: ...
+          - pattern: |
+              apiVersion: rbac.authorization.k8s.io/v1
+              kind: Role
+              metadata: ...
+              rules:
+                - apiGroups: ...
+                  resources: ["*"]
+                  verbs: ...
+          - pattern: |
+              apiVersion: rbac.authorization.k8s.io/v1
+              kind: Role
+              metadata: ...
+              rules:
+                - apiGroups: ...
+                  resources: ...
+                  verbs: ["*"]
+    paths:
+      include:
+        - "**/config/rbac/*.yaml"
+        - "**/deploy/rbac/*.yaml"
+        - "**/manifests/**/*role*.yaml"
+    message: |
+      RBAC manifest contains wildcard permissions (*).
+
+      VULNERABILITY: Wildcard RBAC permissions grant excessive privileges,
+      violating the principle of least privilege. If the ServiceAccount is
+      compromised, attackers gain broad cluster access.
+
+      ATTACK SCENARIO (Wildcard Resources):
+      ```yaml
+      rules:
+        - apiGroups: ["*"]
+          resources: ["*"]  # ❌ Access to ALL resources
+          verbs: ["get", "list"]
+      ```
+
+      If operator compromised → Attacker can read all Secrets, ConfigMaps, etc.
+
+      ATTACK SCENARIO (Wildcard Verbs):
+      ```yaml
+      rules:
+        - apiGroups: ["apps"]
+          resources: ["deployments"]
+          verbs: ["*"]  # ❌ ALL actions on Deployments
+      ```
+
+      If operator compromised → Attacker can delete all Deployments
+
+      REMEDIATION:
+      Replace wildcards with specific permissions:
+
+      ```yaml
+      # BEFORE (VULNERABLE):
+      rules:
+        - apiGroups: ["*"]
+          resources: ["*"]
+          verbs: ["*"]
+
+      # AFTER (SECURE - Example for InferenceService controller):
+      rules:
+        # Custom resources (owned by this operator)
+        - apiGroups: ["ai.redhat.com"]
+          resources:
+            - inferenceservices
+            - inferenceservices/status
+            - inferenceservices/finalizers
+          verbs:
+            - create
+            - delete
+            - get
+            - list
+            - patch
+            - update
+            - watch
+
+        # Core resources (read-only except for owned resources)
+        - apiGroups: [""]
+          resources:
+            - configmaps
+            - secrets
+          verbs:
+            - get
+            - list
+            - watch
+
+        # Core resources (create/update only for owned resources)
+        - apiGroups: [""]
+          resources:
+            - services
+          verbs:
+            - create
+            - delete
+            - get
+            - list
+            - patch
+            - update
+
+        # Deployments (managed by this operator)
+        - apiGroups: ["apps"]
+          resources:
+            - deployments
+          verbs:
+            - create
+            - delete
+            - get
+            - list
+            - patch
+            - update
+            - watch
+      ```
+
+      EXCEPTIONS (Document justification in comments):
+      ```yaml
+      # Aggregated ClusterRole for admin access (intentional wildcard)
+      # Reason: Extends default "admin" role with our CRDs
+      rules:
+        - apiGroups: ["ai.redhat.com"]
+          resources: ["*"]  # OK: Limited to our API group
+          verbs: ["*"]
+      ```
+
+      RBAC DESIGN PRINCIPLES:
+      - Grant only permissions actually used by operator code
+      - Separate read-only vs write permissions
+      - Use resource names for ServiceAccount tokens (not wildcards)
+      - Periodically audit RBAC with `kubectl auth can-i --list`
+
+      REFERENCES:
+      - CWE-269: Improper Privilege Management
+      - Kubernetes RBAC Best Practices
+      - Principle of Least Privilege
+    severity: WARNING
+    languages: [yaml]
+    metadata:
+      category: security
+      technology: [kubernetes, rbac]
+      cwe: "CWE-269"
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      subcategory: [vuln]
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # Rule 2: Secrets in Logs
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: rhoai-secrets-in-logs
+    patterns:
+      # Logging function calls with sensitive field names
+      - pattern-either:
+          # klog
+          - pattern: klog.Infof(..., $MSG, ..., $SECRET, ...)
+          - pattern: klog.Warningf(..., $MSG, ..., $SECRET, ...)
+          - pattern: klog.Errorf(..., $MSG, ..., $SECRET, ...)
+          # logr
+          - pattern: $LOG.Info($MSG, ..., $SECRET, ...)
+          - pattern: $LOG.Error($ERR, $MSG, ..., $SECRET, ...)
+          # zap
+          - pattern: $LOG.Info($MSG, zap.String(..., $SECRET), ...)
+          - pattern: $LOG.Error($MSG, zap.String(..., $SECRET), ...)
+      # Where $SECRET has sensitive field name
+      - metavariable-pattern:
+          metavariable: $SECRET
+          patterns:
+            - pattern-either:
+                - pattern: $OBJ.Password
+                - pattern: $OBJ.Token
+                - pattern: $OBJ.APIKey
+                - pattern: $OBJ.Secret
+                - pattern: $OBJ.AccessKey
+                - pattern: $OBJ.SecretKey
+                - pattern: $SECRET.Data
+                - pattern: $SECRET.StringData
+    message: |
+      Logging call includes potentially sensitive field (Password, Token, APIKey, Secret).
+
+      VULNERABILITY: Secrets logged to stdout are visible in:
+      - kubectl logs output
+      - Cluster logging systems (Elasticsearch, Loki)
+      - Log aggregation platforms
+      - CI/CD pipeline logs
+
+      Once logged, secrets can be accessed by anyone with pod log permissions.
+
+      EXAMPLE VULNERABLE CODE:
+      ```go
+      func (r *Reconciler) syncModel(ctx context.Context, cr *aiv1.InferenceService) error {
+          apiKey := cr.Spec.ModelRegistry.APIKey
+
+          klog.Infof("Syncing model with API key: %s", apiKey)  // ❌ Secret in logs
+
+          resp, err := r.client.Get(
+              "https://registry.example.com/models",
+              withAuth(apiKey),
+          )
+          ...
+      }
+      ```
+
+      REMEDIATION:
+      Redact secrets before logging:
+
+      ```go
+      // BEFORE (VULNERABLE):
+      klog.Infof("Syncing model with API key: %s", cr.Spec.ModelRegistry.APIKey)
+
+      // AFTER (SECURE):
+      klog.Infof("Syncing model with API key: %s", redactSecret(cr.Spec.ModelRegistry.APIKey))
+
+      // Helper function
+      func redactSecret(s string) string {
+          if len(s) <= 4 {
+              return "***"
+          }
+          return s[:4] + "***"  // Show first 4 chars for debugging
+      }
+
+      // Output: "Syncing model with API key: sk_t***"
+      ```
+
+      SAFE LOGGING PATTERNS:
+      ```go
+      // 1. Log object names/namespaces (not contents)
+      klog.Infof("Processing Secret %s/%s", secret.Namespace, secret.Name)
+
+      // 2. Log presence, not values
+      klog.Infof("API key configured: %v", cr.Spec.ModelRegistry.APIKey != "")
+
+      // 3. Log hashes for debugging
+      import "crypto/sha256"
+      hash := sha256.Sum256([]byte(apiKey))
+      klog.Infof("API key hash: %x", hash[:4])  // First 4 bytes of hash
+      ```
+
+      HIGH-RISK FIELDS TO NEVER LOG:
+      - Passwords, passphrases
+      - API keys, tokens, bearer tokens
+      - Private keys, certificates
+      - OAuth client secrets
+      - Database credentials
+      - Webhook secrets
+      - Secret.Data, Secret.StringData (base64-encoded secrets)
+
+      REFERENCES:
+      - CWE-532: Insertion of Sensitive Information into Log File
+      - OWASP: Sensitive Data Exposure
+    severity: ERROR
+    languages: [go]
+    metadata:
+      category: security
+      technology: [logging, secrets]
+      cwe: "CWE-532"
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      subcategory: [vuln]
