@@ -99,7 +99,8 @@ fi
 # Exclude non-production paths to reduce noise
 SEMGREP_EXCLUDES=(vendor node_modules dist build docs examples testdata __pycache__ .next
   test tests '*.pb.go' '*.pb.gw.go' 'zz_generated*' '*_generated.go' '*.md'
-  benchmarks benchmark .buildkite .circleci tools ci hack contrib)
+  benchmarks benchmark .buildkite .circleci tools ci hack contrib
+  'scripts/templates' templates)
 for excl in "${SEMGREP_EXCLUDES[@]}"; do
   SEMGREP_ARGS+=(--exclude "$excl")
 done
