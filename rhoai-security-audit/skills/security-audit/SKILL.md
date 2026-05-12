@@ -5,39 +5,74 @@ description: Runs 15 SAST tools and AI security skills against repositories, nor
 
 # Security Audit
 
-**USE FOR:** security scan, audit repo, check vulnerabilities, generate security report, show security trends
+This skill runs a fixed pipeline. You are an executor: run each step
+in order and dispatch AI skills as instructed. Do not skip steps.
 
-**DO NOT USE FOR:** code review without security focus, dependency updates, general code quality
+## Run exactly these steps
 
-## Steps (MUST follow in order)
-
-### 1. SAST scan (background)
-
-```bash
-bash ${CLAUDE_SKILL_DIR}/scripts/scan_container.sh "${REPO}" "${BRANCH}" "${OUTPUT_DIR}/raw"
+```
+Pipeline:
+- [ ] Step 1: Init session log
+- [ ] Step 2: Run SAST scan (background)
+- [ ] Step 3: Invoke AI skills
+- [ ] Step 4: Wait for SAST, normalize, deduplicate
+- [ ] Step 5: Generate ALL THREE reports
+- [ ] Step 6: Update trends and finalize
 ```
 
-Run in background. This installs tools to `~/.cache/security-audit-tools/` on first run, then scans with all 15 SAST tools.
+**Step 1: Init**
 
-### 2. AI skills (while SAST runs)
+```bash
+DATE=$(date -u +%Y-%m-%d)
+REPO_SHORT="${REPO##*/}"
+OUTPUT_DIR="output/${REPO_SHORT}/${DATE}"
+mkdir -p "${OUTPUT_DIR}/raw"
+python3 ${CLAUDE_SKILL_DIR}/scripts/session_log.py init --repo "${REPO}" --output-dir "${OUTPUT_DIR}"
+```
 
-Read [ai-skills.yaml](ai-skills.yaml) for the list. Invoke EACH skill:
+Parse JSON output. Store `session_file`.
+
+**Step 2: SAST scan (run in background)**
+
+```bash
+bash ${CLAUDE_SKILL_DIR}/scripts/scan_container.sh "${REPO}" main "${OUTPUT_DIR}/raw"
+```
+
+Use `run_in_background: true`. This installs tools on first run
+(~2 min), then scans (~30s). Do not wait for it.
+
+**Step 3: Invoke AI skills**
+
+While SAST runs, invoke EACH AI skill listed in
+[ai-skills.yaml](ai-skills.yaml). Do not skip any.
 
 ```
 Skill(skill="adversarial-reviewing:adversarial-reviewing", args="${REPO}")
+```
+
+After it completes, invoke the next:
+
+```
 Skill(skill="rhoai-security-scanner:audit", args="${REPO}")
 ```
 
-Skip only if `--skip-ai` flag is passed. Log each dispatch.
+Copy outputs to `${OUTPUT_DIR}/raw/adversarial-reviewing/` and
+`${OUTPUT_DIR}/raw/semantic-scan/`.
 
-### 3. Normalize + deduplicate
+Log each dispatch with `session_log.py agent`.
+
+Skip ONLY if `--skip-ai` flag was explicitly passed.
+
+**Step 4: Collect results, normalize, deduplicate**
+
+Wait for the background SAST scan to complete. Then:
 
 ```bash
 python3 ${CLAUDE_SKILL_DIR}/scripts/normalize.py "${OUTPUT_DIR}/raw" > "${OUTPUT_DIR}/normalized-findings.json"
 python3 ${CLAUDE_SKILL_DIR}/scripts/dedup.py "${OUTPUT_DIR}/normalized-findings.json" > "${OUTPUT_DIR}/deduplicated-findings.json"
 ```
 
-### 4. Generate ALL THREE reports
+**Step 5: Generate ALL THREE reports**
 
 ```bash
 python3 ${CLAUDE_SKILL_DIR}/scripts/report.py "${OUTPUT_DIR}" > "${OUTPUT_DIR}/executive-report.md"
@@ -45,16 +80,21 @@ python3 ${CLAUDE_SKILL_DIR}/scripts/report_mustfix.py "${OUTPUT_DIR}" > "${OUTPU
 python3 ${CLAUDE_SKILL_DIR}/scripts/report_html.py "${OUTPUT_DIR}" > "${OUTPUT_DIR}/security-report.html"
 ```
 
-### 5. Trends + session log
+All three. Every run. No exceptions.
+
+**Step 6: Trends and session log**
 
 ```bash
 python3 ${CLAUDE_SKILL_DIR}/scripts/trends.py --add "${OUTPUT_DIR}/scan-metadata.json" --trends-file "output/security-trends.json"
 python3 ${CLAUDE_SKILL_DIR}/scripts/session_log.py finalize --session-file "${SESSION_FILE}"
 ```
 
-## Reference
+Show the trends table and present the executive report to the user.
 
-- [Full workflow details](workflows/audit.md)
-- [Finding schema](reference/finding-schema.md)
-- [Dedup rules](reference/dedup-rules.md)
-- [AI skills config](ai-skills.yaml)
+## Rules
+
+Do not skip AI skills unless `--skip-ai` was explicitly passed.
+Do not skip any of the three reports.
+Do not add your own security analysis.
+Do not modify the pipeline order.
+If a step fails, log the error and continue to the next step.
