@@ -178,6 +178,20 @@ if command -v go &>/dev/null; then
   fi
 fi
 
+# --- Scanner repo (scan-repo.sh + tuned configs) ---
+SCANNER_DIR="${TOOLS_DIR}/scanner"
+if [ ! -f "${SCANNER_DIR}/scripts/scan-repo.sh" ]; then
+  echo "  Fetching scan-repo.sh and tuned configs..."
+  rm -rf "${SCANNER_DIR}"
+  git clone --depth 1 https://github.com/ugiordan/rhoai-security-scanner.git "${SCANNER_DIR}" 2>/dev/null || {
+    echo "  WARNING: Could not clone scanner repo. SAST tools will run without tuned configs."
+  }
+  INSTALLED=$((INSTALLED + 1))
+else
+  SKIPPED=$((SKIPPED + 1))
+fi
+export SCANNER_REPO_DIR="${SCANNER_DIR}"
+
 # Update PATH
 export PATH="${BIN}:${TOOLS_DIR}/venv/bin:${PATH}"
 
