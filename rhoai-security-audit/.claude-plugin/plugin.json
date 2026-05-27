@@ -5,9 +5,5 @@
   "author": {
     "name": "Ugo Giordano",
     "email": "ugiordan@redhat.com"
-  },
-  "dependencies": [
-    "adversarial-reviewing",
-    "rhoai-security-scanner"
-  ]
+  }
 }

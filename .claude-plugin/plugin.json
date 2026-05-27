@@ -6,9 +6,5 @@
     "name": "Ugo Giordano",
     "email": "ugiordan@redhat.com"
   },
-  "skills": "rhoai-security-audit/skills",
-  "dependencies": [
-    "adversarial-reviewing",
-    "rhoai-security-scanner"
-  ]
+  "skills": "rhoai-security-audit/skills"
 }
