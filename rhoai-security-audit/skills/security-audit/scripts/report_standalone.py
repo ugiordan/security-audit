@@ -240,11 +240,31 @@ def generate_html(scan_dirs):
         offset += pct
     donut_gradient = ", ".join(donut_segments) if donut_segments else "#333 0% 100%"
 
-    # Stat cards
+    # Stat cards (Material grid card style)
+    sev_icons = {
+        "critical": "&#9888;&#65039;",  # warning sign
+        "high": "&#9888;",              # warning
+        "medium": "&#9432;",            # info circle
+        "low": "&#8505;",              # info
+        "info": "&#8226;",             # bullet
+    }
+    sev_desc = {
+        "critical": "Immediate action required",
+        "high": "Fix before next release",
+        "medium": "Address in upcoming sprint",
+        "low": "Track for future cleanup",
+        "info": "Informational",
+    }
     stat_cards = ""
     for sev in ["critical", "high", "medium", "low", "info"]:
         c = sev_counts.get(sev, 0)
-        stat_cards += f'<div class="stat-card" style="border-left:3px solid {SEV_COLORS[sev]}"><div class="stat-count" style="color:{SEV_COLORS[sev]}">{c}</div><div class="stat-label">{sev.title()}</div></div>'
+        if c == 0:
+            continue
+        stat_cards += f'''<div class="stat-card" style="border-left:3px solid {SEV_COLORS[sev]}">
+            <div class="stat-icon" style="color:{SEV_COLORS[sev]}">{sev_icons[sev]}</div>
+            <div class="stat-count" style="color:{SEV_COLORS[sev]}">{c} {sev.title()}</div>
+            <div class="stat-desc">{sev_desc[sev]}</div>
+        </div>'''
 
     # Filter chips
     sev_chips = ""
@@ -286,7 +306,7 @@ def generate_html(scan_dirs):
             display = _file_display(f.get("file", ""), f.get("line_start", 0))
             link = f'<a href="{url}" class="file-link" target="_blank">{escape(display)}</a>' if url else f'<code>{escape(display)}</code>'
             sca_rows.append(f'<tr><td>{sev_badge}</td><td>{escape(f.get("source",""))}</td><td>{link}</td><td>{escape(f.get("title","")[:60])}</td><td>{escape(f.get("recommendation","")[:80])}</td></tr>')
-        sca_section = f'''<h3 style="color:#f0f6fc;margin-bottom:12px">Dependency Vulnerabilities ({len(sca_findings)} CVEs)</h3>
+        sca_section = f'''<h3 style="color:rgba(0,0,0,.87);margin-bottom:12px">Dependency Vulnerabilities ({len(sca_findings)} CVEs)</h3>
     <table><thead><tr><th>Severity</th><th>Tool</th><th>File</th><th>Title</th><th>Fix</th></tr></thead>
     <tbody>{"".join(sca_rows)}</tbody></table>'''
 
@@ -308,7 +328,7 @@ def generate_html(scan_dirs):
         style = ' style="color:#4a5568"' if t == 0 else ""
         tool_rows.append(f"<tr{style}><td><strong>{escape(tool)}</strong></td>{cells}<td><strong>{t}</strong></td></tr>")
 
-    tools_section = f'''<h3 style="color:#f0f6fc;margin-bottom:12px">Tool Coverage ({len(tool_sev)} tools)</h3>
+    tools_section = f'''<h3 style="color:rgba(0,0,0,.87);margin-bottom:12px">Tool Coverage ({len(tool_sev)} tools)</h3>
     <table><thead><tr><th>Tool</th><th>Crit</th><th>High</th><th>Med</th><th>Low</th><th>Info</th><th>Total</th></tr></thead>
     <tbody>{"".join(tool_rows)}</tbody></table>'''
 
@@ -341,12 +361,11 @@ a:hover {{ text-decoration:underline; }}
 .content {{ max-width:1000px; margin:0 auto; padding:24px 20px; }}
 h2 {{ font-size:1.25rem; font-weight:300; color:rgba(0,0,0,.87); margin:24px 0 12px; border-bottom:1px solid rgba(0,0,0,.12); padding-bottom:8px; }}
 h3 {{ font-size:1rem; font-weight:400; color:rgba(0,0,0,.87); margin:16px 0 8px; }}
-.stat-row {{ display:flex; gap:12px; margin:16px 0; align-items:center; flex-wrap:wrap; }}
-.stat-card {{ background:#fff; border:1px solid rgba(0,0,0,.12); border-radius:2px; padding:12px 18px; text-align:center; box-shadow:0 1px 2px rgba(0,0,0,.05); }}
-.stat-count {{ font-size:28px; font-weight:300; }}
-.stat-label {{ font-size:10px; text-transform:uppercase; color:rgba(0,0,0,.54); letter-spacing:.5px; }}
-.donut {{ width:80px; height:80px; border-radius:50%; background:conic-gradient({donut_gradient}); position:relative; margin-left:auto; }}
-.donut::after {{ content:'{total}'; position:absolute; inset:14px; background:#fff; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:500; color:rgba(0,0,0,.87); }}
+.stat-row {{ display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:12px; margin:16px 0; }}
+.stat-card {{ background:#fff; border:1px solid rgba(0,0,0,.12); border-radius:2px; padding:16px 20px; box-shadow:0 1px 3px rgba(0,0,0,.06); }}
+.stat-icon {{ font-size:20px; margin-bottom:4px; }}
+.stat-count {{ font-size:18px; font-weight:500; margin-bottom:2px; }}
+.stat-desc {{ font-size:12px; color:rgba(0,0,0,.54); }}
 .tabs {{ display:flex; gap:0; border-bottom:1px solid rgba(0,0,0,.12); margin:20px 0 0; background:#fafafa; }}
 .tab {{ padding:10px 24px; font-size:13px; font-weight:500; color:rgba(0,0,0,.54); cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px; transition:all .15s; user-select:none; text-transform:uppercase; letter-spacing:.5px; }}
 .tab:hover {{ color:rgba(0,0,0,.87); background:rgba(0,0,0,.04); }}
@@ -405,7 +424,11 @@ code {{ background:rgba(0,0,0,.05); padding:2px 6px; border-radius:2px; font-siz
 
 <div class="stat-row">
     {stat_cards}
-    <div class="donut" aria-label="{total} total findings"></div>
+</div>
+
+<div style="background:#ffebee;border-left:4px solid #c62828;border-radius:2px;padding:12px 16px;margin:16px 0">
+    <strong style="color:#c62828">{sev_counts.get('critical',0) + sev_counts.get('high',0)} Must-Fix Items</strong>
+    <span style="color:rgba(0,0,0,.6);margin-left:8px">Findings at HIGH or above requiring immediate attention</span>
 </div>
 
 <div class="tabs">
