@@ -20,8 +20,8 @@ from html import escape
 from pathlib import Path
 
 SEV_COLORS = {
-    "critical": "#dc3545", "high": "#fd7e14", "medium": "#ffc107",
-    "low": "#17a2b8", "info": "#6c757d",
+    "critical": "#c62828", "high": "#e65100", "medium": "#f9a825",
+    "low": "#00838f", "info": "#757575",
 }
 SEV_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
 SOURCE_COLORS = {
@@ -329,77 +329,79 @@ def generate_html(scan_dirs):
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Security Report: {escape(repo_short)}</title>
 <style>
+@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&family=Roboto+Mono:wght@400&display=swap');
 * {{ margin:0; padding:0; box-sizing:border-box; }}
-body {{ font:14px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; background:#0d1117; color:#c9d1d9; padding:24px 40px; max-width:1100px; margin:0 auto; }}
-a {{ color:#58a6ff; text-decoration:none; }}
+body {{ font:16px/1.6 Roboto,-apple-system,BlinkMacSystemFont,sans-serif; background:#fff; color:rgba(0,0,0,.87); }}
+a {{ color:#1565c0; text-decoration:none; }}
 a:hover {{ text-decoration:underline; }}
-h1 {{ font-size:20px; color:#f0f6fc; margin-bottom:2px; }}
-.header-meta {{ color:#4a5568; font-size:12px; margin-bottom:16px; }}
-.stat-row {{ display:flex; gap:10px; margin:12px 0; align-items:center; flex-wrap:wrap; }}
-.stat-card {{ background:#161b22; border:1px solid #30363d; border-radius:6px; padding:10px 16px; text-align:center; }}
-.stat-count {{ font-size:24px; font-weight:700; }}
-.stat-label {{ font-size:10px; text-transform:uppercase; color:#8b949e; }}
+.top-bar {{ background:#000; color:#fff; padding:0 24px; height:48px; display:flex; align-items:center; gap:12px; position:sticky; top:0; z-index:100; }}
+.top-bar h1 {{ font-size:16px; font-weight:400; margin:0; color:#fff; }}
+.top-bar .repo {{ font-size:13px; color:rgba(255,255,255,.7); margin-left:8px; }}
+.top-bar .meta {{ font-size:11px; color:rgba(255,255,255,.5); margin-left:auto; }}
+.content {{ max-width:1000px; margin:0 auto; padding:24px 20px; }}
+h2 {{ font-size:1.25rem; font-weight:300; color:rgba(0,0,0,.87); margin:24px 0 12px; border-bottom:1px solid rgba(0,0,0,.12); padding-bottom:8px; }}
+h3 {{ font-size:1rem; font-weight:400; color:rgba(0,0,0,.87); margin:16px 0 8px; }}
+.stat-row {{ display:flex; gap:12px; margin:16px 0; align-items:center; flex-wrap:wrap; }}
+.stat-card {{ background:#fff; border:1px solid rgba(0,0,0,.12); border-radius:2px; padding:12px 18px; text-align:center; box-shadow:0 1px 2px rgba(0,0,0,.05); }}
+.stat-count {{ font-size:28px; font-weight:300; }}
+.stat-label {{ font-size:10px; text-transform:uppercase; color:rgba(0,0,0,.54); letter-spacing:.5px; }}
 .donut {{ width:80px; height:80px; border-radius:50%; background:conic-gradient({donut_gradient}); position:relative; margin-left:auto; }}
-.donut::after {{ content:'{total}'; position:absolute; inset:14px; background:#0d1117; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; color:#f0f6fc; }}
-.filter-bar {{ padding:12px 0; border-bottom:1px solid #21262d; margin-bottom:12px; }}
-.filter-row {{ display:flex; gap:4px; flex-wrap:wrap; align-items:center; margin-bottom:6px; }}
-.filter-row:last-child {{ margin-bottom:0; }}
-.filter-label {{ font-size:10px; color:#8b949e; margin-right:4px; min-width:55px; }}
-.filter-chip {{ padding:3px 10px; border-radius:12px; font-size:11px; font-weight:500; cursor:pointer; background:#30363d; color:#8b949e; border:1px solid transparent; transition:all .15s; user-select:none; }}
-.filter-chip.active {{ background:var(--active-bg,#30363d); color:#fff; border-color:rgba(255,255,255,.1); }}
-.filter-chip:hover {{ opacity:.85; }}
-.counter {{ font-size:11px; color:#8b949e; margin-bottom:10px; }}
-.finding-card {{ background:#161b22; border:1px solid #30363d; border-left:3px solid #6c757d; border-radius:6px; padding:12px 14px; margin-bottom:8px; transition:border-color .15s; }}
-.finding-card:hover {{ border-color:#58a6ff; }}
-.finding-card.hidden {{ display:none; }}
-.card-header {{ display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-bottom:4px; }}
-.card-title {{ color:#f0f6fc; font-size:13px; font-weight:500; }}
-.card-file {{ margin-left:auto; font-size:11px; }}
-.file-link {{ color:#58a6ff; font-size:11px; }}
-.card-desc {{ font-size:12px; color:#c9d1d9; margin-top:4px; }}
-.chip {{ display:inline-block; padding:1px 7px; border-radius:10px; font-size:10px; font-weight:600; color:#fff; white-space:nowrap; }}
-.snippet {{ background:#0d1117; border:1px solid #21262d; padding:6px 8px; border-radius:4px; font-size:11px; margin-top:6px; overflow-x:auto; color:#e6edf3; }}
-.card-expand {{ padding:8px 0 4px; border-top:1px solid #21262d; margin-top:8px; font-size:12px; }}
-.fix-label {{ color:#8b949e; font-weight:600; font-size:11px; text-transform:uppercase; }}
-.card-toggle {{ color:#58a6ff; font-size:11px; cursor:pointer; margin-top:4px; }}
-.card-toggle:hover {{ text-decoration:underline; }}
-.collapsible {{ background:#161b22; border:1px solid #30363d; border-radius:6px; margin:16px 0 8px; }}
-.collapsible summary {{ padding:10px 14px; cursor:pointer; display:flex; align-items:center; gap:8px; list-style:none; }}
-.collapsible summary::-webkit-details-marker {{ display:none; }}
-.collapsible summary::before {{ content:'▸'; color:#8b949e; font-size:14px; transition:transform .2s; }}
-.collapsible[open] summary::before {{ transform:rotate(90deg); }}
-.collapse-title {{ color:#f0f6fc; font-size:13px; font-weight:500; }}
-.collapse-hint {{ color:#4a5568; font-size:10px; margin-left:auto; }}
-.collapse-body {{ padding:0 14px 14px; }}
-table {{ width:100%; border-collapse:collapse; font-size:12px; }}
-th {{ background:#0d1117; padding:6px 8px; text-align:left; border-bottom:1px solid #30363d; color:#8b949e; font-weight:600; text-transform:uppercase; font-size:10px; }}
-td {{ padding:5px 8px; border-bottom:1px solid #161b22; }}
-tr:hover {{ background:#0d1117; }}
-code {{ background:#21262d; padding:1px 5px; border-radius:3px; font-size:11px; }}
-.sev-critical {{ color:#dc3545; }} .sev-high {{ color:#fd7e14; }} .sev-medium {{ color:#ffc107; }}
-.sev-low {{ color:#17a2b8; }} .sev-info {{ color:#6c757d; }}
-.tabs {{ display:flex; gap:0; border-bottom:2px solid #21262d; margin:16px 0 0; }}
-.tab {{ padding:8px 20px; font-size:13px; font-weight:500; color:#8b949e; cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-2px; transition:all .15s; user-select:none; }}
-.tab:hover {{ color:#c9d1d9; }}
-.tab.active {{ color:#f0f6fc; border-bottom-color:#58a6ff; }}
-.tab-badge {{ background:#30363d; color:#8b949e; padding:1px 6px; border-radius:8px; font-size:10px; margin-left:4px; }}
-.tab-panel {{ display:none; padding-top:12px; }}
+.donut::after {{ content:'{total}'; position:absolute; inset:14px; background:#fff; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:500; color:rgba(0,0,0,.87); }}
+.tabs {{ display:flex; gap:0; border-bottom:1px solid rgba(0,0,0,.12); margin:20px 0 0; background:#fafafa; }}
+.tab {{ padding:10px 24px; font-size:13px; font-weight:500; color:rgba(0,0,0,.54); cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px; transition:all .15s; user-select:none; text-transform:uppercase; letter-spacing:.5px; }}
+.tab:hover {{ color:rgba(0,0,0,.87); background:rgba(0,0,0,.04); }}
+.tab.active {{ color:#1565c0; border-bottom-color:#1565c0; }}
+.tab-badge {{ background:rgba(0,0,0,.08); color:rgba(0,0,0,.54); padding:2px 7px; border-radius:10px; font-size:10px; margin-left:4px; font-weight:400; }}
+.tab-panel {{ display:none; padding-top:16px; }}
 .tab-panel.active {{ display:block; }}
-.footer {{ margin-top:32px; padding-top:12px; border-top:1px solid #21262d; color:#4a5568; font-size:11px; }}
+.filter-bar {{ padding:12px 0; border-bottom:1px solid rgba(0,0,0,.08); margin-bottom:12px; }}
+.filter-row {{ display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-bottom:6px; }}
+.filter-row:last-child {{ margin-bottom:0; }}
+.filter-label {{ font-size:11px; color:rgba(0,0,0,.54); margin-right:4px; min-width:55px; font-weight:500; text-transform:uppercase; letter-spacing:.3px; }}
+.filter-chip {{ padding:4px 12px; border-radius:16px; font-size:12px; font-weight:400; cursor:pointer; background:rgba(0,0,0,.06); color:rgba(0,0,0,.54); border:1px solid rgba(0,0,0,.08); transition:all .15s; user-select:none; }}
+.filter-chip.active {{ background:var(--active-bg,#1565c0); color:#fff; border-color:transparent; }}
+.filter-chip:hover {{ box-shadow:0 1px 3px rgba(0,0,0,.12); }}
+.counter {{ font-size:12px; color:rgba(0,0,0,.54); margin-bottom:12px; }}
+.finding-card {{ background:#fff; border:1px solid rgba(0,0,0,.12); border-left:3px solid #bdbdbd; border-radius:2px; padding:14px 16px; margin-bottom:10px; transition:box-shadow .15s; }}
+.finding-card:hover {{ box-shadow:0 2px 6px rgba(0,0,0,.1); }}
+.finding-card.hidden {{ display:none; }}
+.card-header {{ display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-bottom:6px; }}
+.card-title {{ color:rgba(0,0,0,.87); font-size:14px; font-weight:500; }}
+.card-file {{ margin-left:auto; font-size:12px; }}
+.file-link {{ color:#1565c0; font-size:12px; font-family:'Roboto Mono',monospace; }}
+.card-desc {{ font-size:13px; color:rgba(0,0,0,.6); margin-top:4px; line-height:1.5; }}
+.chip {{ display:inline-block; padding:2px 8px; border-radius:2px; font-size:11px; font-weight:500; color:#fff; white-space:nowrap; letter-spacing:.3px; }}
+.snippet {{ background:#f5f5f5; border:1px solid rgba(0,0,0,.08); padding:8px 10px; border-radius:2px; font-size:12px; font-family:'Roboto Mono',monospace; margin-top:8px; overflow-x:auto; color:#263238; }}
+.card-expand {{ padding:10px 0 4px; border-top:1px solid rgba(0,0,0,.08); margin-top:10px; font-size:13px; }}
+.fix-label {{ color:rgba(0,0,0,.54); font-weight:500; font-size:11px; text-transform:uppercase; letter-spacing:.3px; }}
+.card-toggle {{ color:#1565c0; font-size:12px; cursor:pointer; margin-top:6px; font-weight:500; }}
+.card-toggle:hover {{ text-decoration:underline; }}
+table {{ width:100%; border-collapse:collapse; font-size:13px; }}
+th {{ background:rgba(0,0,0,.04); padding:8px 10px; text-align:left; border-bottom:1px solid rgba(0,0,0,.12); color:rgba(0,0,0,.54); font-weight:500; text-transform:uppercase; font-size:11px; letter-spacing:.3px; }}
+td {{ padding:6px 10px; border-bottom:1px solid rgba(0,0,0,.06); }}
+tr:hover {{ background:rgba(0,0,0,.02); }}
+code {{ background:rgba(0,0,0,.05); padding:2px 6px; border-radius:2px; font-size:12px; font-family:'Roboto Mono',monospace; }}
+.sev-critical {{ color:#c62828; }} .sev-high {{ color:#e65100; }} .sev-medium {{ color:#f9a825; }}
+.sev-low {{ color:#00838f; }} .sev-info {{ color:#757575; }}
+.footer {{ margin-top:32px; padding:16px 0; border-top:1px solid rgba(0,0,0,.12); color:rgba(0,0,0,.38); font-size:12px; }}
 @media (max-width:700px) {{
-  body {{ padding:12px; }}
+  .content {{ padding:12px; }}
   .stat-row {{ gap:6px; }}
-  .stat-card {{ padding:6px 10px; }}
-  .stat-count {{ font-size:18px; }}
-  .card-header {{ font-size:12px; }}
+  .stat-card {{ padding:8px 10px; }}
+  .stat-count {{ font-size:20px; }}
+  .tab {{ padding:8px 14px; font-size:11px; }}
   .donut {{ width:60px; height:60px; }}
   .donut::after {{ inset:10px; font-size:13px; }}
 }}
 </style>
 </head>
 <body>
-<h1>Security Report: {escape(repo_short)}</h1>
-<div class="header-meta">{escape(repo_full)} | {escape(branch_ref)} | {escape(str(commit_ref)[:8])} | {escape(str(date)[:10])}</div>
+<div class="top-bar">
+    <h1>Security Audit Report</h1>
+    <span class="repo">{escape(repo_short)}</span>
+    <span class="meta">{escape(branch_ref)} | {escape(str(commit_ref)[:8])} | {escape(str(date)[:10])}</span>
+</div>
+<div class="content">
 
 <div class="stat-row">
     {stat_cards}
@@ -431,6 +433,7 @@ code {{ background:#21262d; padding:1px 5px; border-radius:3px; font-size:11px; 
 </div>
 
 <div class="footer">Generated by RHOAI Security Audit | {" | ".join(footer_parts)}</div>
+</div><!-- /content -->
 
 <script>
 window.switchTab = function(name, el) {{
