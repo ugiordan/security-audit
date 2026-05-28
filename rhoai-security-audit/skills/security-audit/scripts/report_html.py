@@ -32,10 +32,23 @@ def load_findings(scan_dir):
 
 
 def load_metadata(scan_dir):
-    f = Path(scan_dir) / "scan-metadata.json"
+    p = Path(scan_dir)
+    meta = {}
+    f = p / "scan-metadata.json"
     if f.exists():
-        return json.loads(f.read_text())
-    return {}
+        meta = json.loads(f.read_text())
+    # Enrich with commit-info.json (has default_branch and commit_sha)
+    ci = p / "raw" / "commit-info.json"
+    if ci.exists():
+        try:
+            info = json.loads(ci.read_text())
+            if not meta.get("branch"):
+                meta["branch"] = info.get("default_branch", "main")
+            if not meta.get("commit"):
+                meta["commit"] = info.get("commit_sha", "")
+        except Exception:
+            pass
+    return meta
 
 
 def load_ai_findings(scan_dir):
