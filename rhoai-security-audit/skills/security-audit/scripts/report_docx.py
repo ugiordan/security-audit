@@ -152,6 +152,67 @@ def _add_code(doc, text):
     return p
 
 
+def _add_recommendation(doc, text):
+    """Render recommendation with inline code blocks properly formatted."""
+    import re
+    # Split on markdown code fences or detect code-like lines
+    parts = re.split(r'(```[\s\S]*?```|`[^`]+`)', text)
+
+    p = doc.add_paragraph()
+    run = p.add_run("Recommended Fix: ")
+    run.font.name = BODY_FONT
+    run.font.size = Pt(10)
+    run.font.bold = True
+    run.font.color.rgb = RH_RED
+
+    # Detect if the text has code patterns (indented lines, shell commands, etc.)
+    lines = text.split("\n")
+    prose_lines = []
+    code_lines = []
+    in_code = False
+
+    for line in lines:
+        stripped = line.strip()
+        is_code = (
+            stripped.startswith("```") or
+            stripped.startswith("$") or
+            stripped.startswith("#") and not stripped.startswith("# ") or
+            stripped.startswith("rm ") or stripped.startswith("mv ") or
+            stripped.startswith("if ") and stripped.endswith(";") or
+            "=" in stripped and not " " in stripped.split("=")[0] or
+            stripped.startswith("func ") or stripped.startswith("return ") or
+            stripped.startswith("for ") and ":=" in stripped or
+            line.startswith("  ") and len(stripped) > 0 and any(
+                c in stripped for c in ["{", "}", "()", "//", "/*", "=>", ":=", "&&"])
+        )
+
+        if stripped.startswith("```"):
+            in_code = not in_code
+            continue
+
+        if in_code or is_code:
+            if prose_lines:
+                run = p.add_run(" ".join(prose_lines))
+                run.font.name = BODY_FONT
+                run.font.size = Pt(10)
+                prose_lines = []
+            code_lines.append(line)
+        else:
+            if code_lines:
+                _add_code(doc, "\n".join(code_lines))
+                code_lines = []
+                p = doc.add_paragraph()
+            prose_lines.append(stripped)
+
+    if prose_lines:
+        run = p.add_run(" ".join(prose_lines))
+        run.font.name = BODY_FONT
+        run.font.size = Pt(10)
+
+    if code_lines:
+        _add_code(doc, "\n".join(code_lines))
+
+
 def _set_cell_shading(cell, color_hex):
     shading = cell._element.get_or_add_tcPr()
     from lxml import etree
@@ -397,15 +458,7 @@ def generate_docx(scan_dir, output_path):
 
             rec = f.get("recommendation", "")
             if rec:
-                p = doc.add_paragraph()
-                run = p.add_run("Recommended Fix: ")
-                run.font.name = BODY_FONT
-                run.font.size = Pt(10)
-                run.font.bold = True
-                run.font.color.rgb = RH_RED
-                run = p.add_run(rec[:400])
-                run.font.name = BODY_FONT
-                run.font.size = Pt(10)
+                _add_recommendation(doc, rec[:600])
 
             doc.add_paragraph()
 

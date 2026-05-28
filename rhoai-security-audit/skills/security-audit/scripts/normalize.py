@@ -14,6 +14,24 @@ SEVERITY_MAP = {
     "NOTE": "info", "info": "info", "style": "info", "warning": "high", "error": "critical",
 }
 
+def _clean_rule_id(check_id):
+    """Strip local filesystem paths from semgrep check_id, keep just the rule name."""
+    if not check_id:
+        return ""
+    parts = check_id.split(".")
+    # If it looks like a path (contains Users, home, cache, configs, etc), take the last segments
+    path_markers = {"Users", "home", "cache", "plugins", "configs", "semgrep", "skills"}
+    if any(p in path_markers for p in parts):
+        # Find the last meaningful segment(s) after the config path
+        for i in range(len(parts) - 1, -1, -1):
+            if parts[i] in path_markers or parts[i].startswith("ugiordan"):
+                return "-".join(parts[i + 1:]) if i + 1 < len(parts) else parts[-1]
+    # Standard semgrep registry rules: keep the last 2-3 segments
+    if len(parts) > 3:
+        return ".".join(parts[-3:])
+    return check_id
+
+
 TOOL_PREFIX = {
     "semgrep": "SEM", "gitleaks": "GLK", "trufflehog": "THG",
     "trivy": "TRV", "grype": "GRP", "kube-linter": "KBL",
@@ -44,7 +62,7 @@ def parse_semgrep(path):
             "line_end": r.get("end", {}).get("line", 0),
             "title": r.get("check_id", "").split(".")[-1],
             "description": r.get("extra", {}).get("message", ""),
-            "confidence": 0.8, "rule_id": r.get("check_id", ""),
+            "confidence": 0.8, "rule_id": _clean_rule_id(r.get("check_id", "")),
             "detected_by": ["semgrep"], "recommendation": "",
             "snippet": r.get("extra", {}).get("lines", "").strip(),
         })
