@@ -499,6 +499,15 @@ def build_site(scan_dirs):
     if site_index.exists():
         print(f"Report: file://{site_index.resolve()}")
 
+        # Create zip for sharing
+        import zipfile
+        zip_path = output_base / "security-report.zip"
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for f in site_dir.rglob("*"):
+                if f.is_file():
+                    zf.write(f, f.relative_to(site_dir.parent))
+        print(f"Zip: {zip_path} ({zip_path.stat().st_size // 1024}KB)")
+
     # Clean up build temp
     shutil.rmtree(mkdocs_root, ignore_errors=True)
 
