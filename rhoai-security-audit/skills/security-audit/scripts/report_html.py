@@ -144,6 +144,7 @@ CAT_LABELS = {
     "config": "Configuration",
     "cicd": "CI/CD",
     "injection": "Injection",
+    "ai-review": "AI Review",
     "other": "SAST",
 }
 
@@ -185,16 +186,26 @@ def _snippet_block(snippet):
     return f'<pre style="background:#161b22;padding:8px;border-radius:4px;font-size:11px;margin:4px 0;overflow-x:auto;max-width:500px"><code>{code}</code></pre>'
 
 
+SEV_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
+
+TRIAGE_BADGES = {
+    "corroborated": '<span class="badge" style="background:#16a34a;margin-left:4px" title="Found by both SAST and AI">CORR</span>',
+    "ai-only": '<span class="badge" style="background:#2563eb;margin-left:4px" title="AI-only finding (logic bug)">AI</span>',
+    "sast-only": "",
+}
+
+
 def _render_findings_table(findings, repo_short, show_detected_by=True,
-                           repo_full="", branch="main", branch_ref="", commit_ref=""):
+                           repo_full="", branch_ref="", commit_ref=""):
     if not findings:
         return "<p>No findings.</p>"
+    sorted_findings = sorted(findings, key=lambda f: -SEV_RANK.get(f.get("severity", ""), 0))
     rows = []
-    for i, f in enumerate(findings[:100], 1):
+    for i, f in enumerate(sorted_findings[:100], 1):
         fpath = f.get("file", "")
         line = f.get("line_start", 0)
         line_end = f.get("line_end", 0)
-        ref = branch_ref if f.get("origin") == "ai" and branch_ref else (commit_ref or branch)
+        ref = branch_ref if f.get("origin") == "ai" and branch_ref else (commit_ref or branch_ref or "main")
         file_link = _github_link(fpath, line, line_end, repo_full, ref)
         ftitle = escape(f.get("title", "")[:80])
         src = escape(f.get("source", ""))
@@ -202,8 +213,10 @@ def _render_findings_table(findings, repo_short, show_detected_by=True,
         rec = escape(f.get("recommendation", "")[:100])
         sev = _sev_badge(f["severity"])
         snippet = _snippet_block(f.get("snippet", ""))
+        triage_status = f.get("triage", {}).get("status", "")
+        triage_badge = TRIAGE_BADGES.get(triage_status, "")
         det_col = f"<td>{escape(det)}</td>" if show_detected_by else ""
-        rows.append(f"<tr><td>{i}</td><td>{sev}</td><td>{src}</td>"
+        rows.append(f"<tr><td>{i}</td><td>{sev}{triage_badge}</td><td>{src}</td>"
                      f"<td>{file_link}</td>"
                      f"<td>{ftitle}{snippet}</td>{det_col}"
                      f"<td>{rec}</td></tr>")
@@ -233,21 +246,21 @@ def generate_html(scan_dirs):
     for _, f, _ in all_data:
         all_findings.extend(f)
 
-    # AI findings are included in triaged-findings.json (origin=ai)
-    # If not triaged yet, load them separately as fallback
+    # AI findings: extract from triaged data, or load separately as fallback
     ai_findings = [f for f in all_findings if f.get("origin") == "ai"]
     if not ai_findings:
         for d in scan_dirs:
-            ai_findings.extend(load_ai_findings(d))
+            loaded = load_ai_findings(d)
+            ai_findings.extend(loaded)
+            all_findings.extend(loaded)
 
     first_meta = all_data[0][2]
     title = "RHOAI Security Audit Report" if multi else f"Security Report: {first_meta.get('repo', 'Unknown')}"
 
-    combined = all_findings + ai_findings
-    sev_counts = Counter(f["severity"] for f in combined)
-    tool_counts = Counter(f.get("source", "unknown") for f in combined)
-    cat_counts = Counter(f.get("category", "other") for f in combined)
-    total = len(combined)
+    sev_counts = Counter(f["severity"] for f in all_findings)
+    tool_counts = Counter(f.get("source", "unknown") for f in all_findings)
+    cat_counts = Counter(f.get("category", "other") for f in all_findings)
+    total = len(all_findings)
 
     # Severity donut data
     donut_segments = []
@@ -273,8 +286,12 @@ def generate_html(scan_dirs):
         nav_items.append('<a href="#secrets">Secrets</a>')
     if ai_findings:
         nav_items.append('<a href="#ai-review">AI Review</a>')
-    nav_items.append('<a href="#critical">Critical</a>')
-    nav_items.append('<a href="#high">High</a>')
+    crit_findings = [f for f in all_findings if f["severity"] == "critical" and f.get("category") not in ("sca", "secrets")]
+    high_findings = [f for f in all_findings if f["severity"] == "high" and f.get("category") not in ("sca", "secrets")]
+    if crit_findings:
+        nav_items.append('<a href="#critical">Critical</a>')
+    if high_findings:
+        nav_items.append('<a href="#high">High</a>')
     if multi:
         for _, _, m in all_data:
             repo = m.get("repo", "?").split("/")[-1]
@@ -282,7 +299,7 @@ def generate_html(scan_dirs):
 
     # Tool x severity matrix: include all tools that ran (even with 0 findings)
     tool_sev = defaultdict(Counter)
-    for f in combined:
+    for f in all_findings:
         tool_sev[f.get("source", "unknown")][f["severity"]] += 1
 
     # Add tools from metadata that had zero findings
@@ -367,8 +384,6 @@ def generate_html(scan_dirs):
     # AI Review section
     ai_section = ""
     if ai_findings:
-        ai_important = [f for f in ai_findings if f["severity"] in ("critical", "high")]
-        ai_minor = [f for f in ai_findings if f["severity"] not in ("critical", "high")]
         ai_rows = []
         for i, f in enumerate(ai_findings, 1):
             file_link = _github_link(f.get("file", ""), f.get("line_start", 0),
@@ -390,18 +405,15 @@ def generate_html(scan_dirs):
         </table>
     </section>"""
 
-    crit_findings = [f for f in all_findings if f["severity"] == "critical" and f.get("category") not in ("sca", "secrets")]
-    high_findings = [f for f in all_findings if f["severity"] == "high" and f.get("category") not in ("sca", "secrets")]
-
     crit_section = f"""
     <section id="critical">
-        <h2>Critical SAST Findings ({len(crit_findings)})</h2>
+        <h2>Critical Findings ({len(crit_findings)})</h2>
         {_render_findings_table(crit_findings, repo_short, repo_full=repo_full, branch_ref=branch_ref, commit_ref=commit_ref)}
     </section>""" if crit_findings else ""
 
     high_section = f"""
     <section id="high">
-        <h2>High SAST Findings ({len(high_findings)})</h2>
+        <h2>High Findings ({len(high_findings)})</h2>
         {_render_findings_table(high_findings, repo_short, repo_full=repo_full, branch_ref=branch_ref, commit_ref=commit_ref)}
     </section>""" if high_findings else ""
 
@@ -463,6 +475,14 @@ code {{ background: #21262d; padding: 2px 6px; border-radius: 3px; font-size: 12
 .sev-info {{ color: #6c757d; }}
 .overflow {{ color: #8b949e; font-style: italic; margin: 8px 0; }}
 section {{ margin-bottom: 24px; }}
+.table-wrap {{ overflow-x: auto; }}
+@media (max-width: 900px) {{
+  .sidebar {{ display: none; }}
+  .main {{ margin-left: 0; padding: 16px; }}
+  .meta-grid {{ grid-template-columns: repeat(2, 1fr); }}
+  .stat-cards {{ flex-wrap: wrap; }}
+  .donut-container {{ flex-direction: column; }}
+}}
 </style>
 </head>
 <body>
