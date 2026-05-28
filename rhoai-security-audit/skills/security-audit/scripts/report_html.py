@@ -472,9 +472,11 @@ def build_site(scan_dirs):
     (docs_dir / "dependencies.md").write_text(generate_dependencies(all_findings, repo_full, branch))
     (docs_dir / "tools.md").write_text(generate_tools(all_findings))
 
-    # Build with mkdocs (use absolute paths to avoid cwd issues)
-    site_dir = output_base.resolve() / "site"
-    print(f"Building MkDocs site in {mkdocs_root}")
+    # Build with mkdocs
+    site_dir = output_base.resolve() / "security-report"
+    if site_dir.exists():
+        shutil.rmtree(site_dir)
+    print(f"Building MkDocs site...")
     result = subprocess.run(
         ["mkdocs", "build", "--strict", "--site-dir", str(site_dir)],
         cwd=str(mkdocs_root),
@@ -483,7 +485,6 @@ def build_site(scan_dirs):
     )
 
     if result.returncode != 0:
-        print(f"mkdocs build failed:\n{result.stderr}")
         result = subprocess.run(
             ["mkdocs", "build", "--site-dir", str(site_dir)],
             cwd=str(mkdocs_root),
@@ -491,16 +492,15 @@ def build_site(scan_dirs):
             text=True,
         )
         if result.returncode != 0:
-            print(f"mkdocs build failed again:\n{result.stderr}")
+            print(f"mkdocs build failed:\n{result.stderr}")
             return
 
     site_index = site_dir / "index.html"
-    print(f"Site built: file://{site_index}")
-
-    # Also copy index.html as security-report.html for backward compat
     if site_index.exists():
-        shutil.copy2(site_index, output_base / "security-report-mkdocs.html")
-        print(f"Report: file://{output_base / 'security-report-mkdocs.html'}")
+        print(f"Report: file://{site_index.resolve()}")
+
+    # Clean up build temp
+    shutil.rmtree(mkdocs_root, ignore_errors=True)
 
 
 def main():

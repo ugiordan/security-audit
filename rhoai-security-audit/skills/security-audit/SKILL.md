@@ -114,26 +114,8 @@ The triage step:
 ```bash
 python3 ${CLAUDE_SKILL_DIR}/scripts/report.py "${OUTPUT_DIR}" > "${OUTPUT_DIR}/executive-report.md"
 python3 ${CLAUDE_SKILL_DIR}/scripts/report_mustfix.py "${OUTPUT_DIR}" > "${OUTPUT_DIR}/must-fix-report.md"
-python3 ${CLAUDE_SKILL_DIR}/scripts/report_html.py "${OUTPUT_DIR}" > "${OUTPUT_DIR}/security-report.html"
+python3 ${CLAUDE_SKILL_DIR}/scripts/report_html.py "${OUTPUT_DIR}"  # builds security-report/ site
 python3 ${CLAUDE_SKILL_DIR}/scripts/report_mustfix.py "${OUTPUT_DIR}" --html > "${OUTPUT_DIR}/must-fix-report.html"
-```
-
-Generate Google Docs versions of both reports:
-
-```
-mcp__google-docs__convert_markdown_to_doc(
-  markdown_content=<contents of executive-report.md>,
-  title="Security Report: ${REPO_SHORT} (${DATE})"
-)
-mcp__google-docs__convert_markdown_to_doc(
-  markdown_content=<contents of must-fix-report.md>,
-  title="Must-Fix: ${REPO_SHORT} (${DATE})"
-)
-```
-
-Generate Word document (Red Hat template styling):
-
-```bash
 python3 ${CLAUDE_SKILL_DIR}/scripts/report_docx.py "${OUTPUT_DIR}"
 ```
 
