@@ -342,16 +342,45 @@ _CONTAINER_PATH_RE = re.compile(r"^/tmp/scan-[^/]+/")
 
 
 def _clean_file_path(filepath, repo_name=""):
+    """Strip absolute paths, container paths, and repos/ prefixes to get repo-relative paths."""
     if not filepath:
         return filepath
     filepath = filepath.replace("\\", "/")
+
+    # Strip absolute paths: /Users/.../repos/<repo>/ or /home/.../repos/<repo>/
+    if filepath.startswith("/"):
+        # Find repos/<name>/ boundary
+        parts = filepath.split("/")
+        for i, p in enumerate(parts):
+            if p == "repos" and i + 1 < len(parts):
+                filepath = "/".join(parts[i + 2:])
+                break
+        else:
+            # No repos/ found, strip everything up to a known project marker
+            for i, p in enumerate(parts):
+                if p in ("cmd", "pkg", "internal", "api", "charts", ".github",
+                         "scripts", "Dockerfile", "go.mod", "kagenti-operator"):
+                    filepath = "/".join(parts[i:])
+                    break
+            else:
+                filepath = filepath.lstrip("/")
+
+    # Strip /tmp/scan-<repo>/ container paths
     filepath = _CONTAINER_PATH_RE.sub("", filepath)
     filepath = filepath.lstrip("/")
+
+    # Strip repos/<repo>/ prefix (from relative paths)
+    parts = filepath.split("/")
+    if len(parts) > 1 and parts[0] == "repos":
+        filepath = "/".join(parts[2:])
+
+    # Strip repo short name prefix (e.g., agents-operator/)
     if repo_name:
         short = repo_name.split("/")[-1]
         prefix = f"{short}/"
         if filepath.startswith(prefix):
             filepath = filepath[len(prefix):]
+
     return filepath
 
 
