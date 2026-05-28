@@ -185,7 +185,8 @@ def _snippet_block(snippet):
     return f'<pre style="background:#161b22;padding:8px;border-radius:4px;font-size:11px;margin:4px 0;overflow-x:auto;max-width:500px"><code>{code}</code></pre>'
 
 
-def _render_findings_table(findings, repo_short, show_detected_by=True, repo_full="", branch="main"):
+def _render_findings_table(findings, repo_short, show_detected_by=True,
+                           repo_full="", branch="main", branch_ref="", commit_ref=""):
     if not findings:
         return "<p>No findings.</p>"
     rows = []
@@ -193,7 +194,8 @@ def _render_findings_table(findings, repo_short, show_detected_by=True, repo_ful
         fpath = f.get("file", "")
         line = f.get("line_start", 0)
         line_end = f.get("line_end", 0)
-        file_link = _github_link(fpath, line, line_end, repo_full, branch)
+        ref = branch_ref if f.get("origin") == "ai" and branch_ref else (commit_ref or branch)
+        file_link = _github_link(fpath, line, line_end, repo_full, ref)
         ftitle = escape(f.get("title", "")[:80])
         src = escape(f.get("source", ""))
         det = ", ".join(f.get("detected_by", [src]))
@@ -350,7 +352,7 @@ def generate_html(scan_dirs):
         sca_section = f"""
         <section id="cves">
             <h2>Dependency Vulnerabilities ({len(sca_findings)})</h2>
-            {_render_findings_table(sca_findings, repo_short, repo_full=repo_full, branch=commit_ref or branch_ref)}
+            {_render_findings_table(sca_findings, repo_short, repo_full=repo_full, branch_ref=branch_ref, commit_ref=commit_ref)}
         </section>"""
 
     secrets_section = ""
@@ -359,7 +361,7 @@ def generate_html(scan_dirs):
         secrets_section = f"""
         <section id="secrets">
             <h2>Secrets Detected ({len(secret_findings)})</h2>
-            {_render_findings_table(secret_findings, repo_short, show_detected_by=False, repo_full=repo_full, branch=commit_ref or branch_ref)}
+            {_render_findings_table(secret_findings, repo_short, show_detected_by=False, repo_full=repo_full, branch_ref=branch_ref, commit_ref=commit_ref)}
         </section>"""
 
     # AI Review section
@@ -394,13 +396,13 @@ def generate_html(scan_dirs):
     crit_section = f"""
     <section id="critical">
         <h2>Critical SAST Findings ({len(crit_findings)})</h2>
-        {_render_findings_table(crit_findings, repo_short, repo_full=repo_full, branch=commit_ref or branch_ref)}
+        {_render_findings_table(crit_findings, repo_short, repo_full=repo_full, branch_ref=branch_ref, commit_ref=commit_ref)}
     </section>""" if crit_findings else ""
 
     high_section = f"""
     <section id="high">
         <h2>High SAST Findings ({len(high_findings)})</h2>
-        {_render_findings_table(high_findings, repo_short, repo_full=repo_full, branch=commit_ref or branch_ref)}
+        {_render_findings_table(high_findings, repo_short, repo_full=repo_full, branch_ref=branch_ref, commit_ref=commit_ref)}
     </section>""" if high_findings else ""
 
     # Multi-repo sections

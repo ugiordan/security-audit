@@ -56,49 +56,107 @@ def parse_ai_findings(scan_dir):
 
 def _extract_findings(text, source):
     findings = []
+
+    # Try adversarial-reviewing format: "Finding ID: SEC-001" or "### SEC-001"
     blocks = re.split(r'\n(?=(?:Finding ID:|###?\s+(?:SEC|PERF|QUAL|CORR|ARCH|FINDING)-\d+))', text)
     for block in blocks:
         id_match = re.search(
             r'(?:Finding ID:\s*|###?\s+)((?:SEC|PERF|QUAL|CORR|ARCH|FINDING)-\d+)', block)
         if not id_match:
             continue
+        f = _parse_adversarial_block(block, id_match.group(1), source)
+        if f:
+            findings.append(f)
 
-        f = {"id": id_match.group(1), "source": source, "origin": "ai",
-             "category": "ai-review", "detected_by": [source], "triage": {}}
+    # Try semantic-scan format: "### N. Title" with **Severity**: HIGH
+    if not findings:
+        blocks = re.split(r'\n(?=### \d+\.)', text)
+        for i, block in enumerate(blocks):
+            heading = re.match(r'### \d+\.\s+(.+?)(?:\n|$)', block)
+            if not heading:
+                continue
+            f = _parse_semantic_block(block, heading.group(1).strip(), source, i + 1)
+            if f:
+                findings.append(f)
 
-        sev_match = re.search(r'Severity:\s*(\w+)', block, re.IGNORECASE)
-        if sev_match:
-            sev = sev_match.group(1).lower()
-            f["severity"] = {"critical": "critical", "important": "high", "high": "high",
-                             "medium": "medium", "minor": "low"}.get(sev, "medium")
-        else:
-            f["severity"] = "medium"
-
-        title_match = re.search(r'Title:\s*(.+?)(?:\n|$)', block)
-        f["title"] = title_match.group(1).strip() if title_match else f["id"]
-        f["rule_id"] = f["id"]
-
-        file_match = re.search(r'File:\s*`?([^\n`]+)`?', block)
-        f["file"] = file_match.group(1).strip() if file_match else ""
-
-        line_match = re.search(r'Lines?:\s*(\d+)', block)
-        f["line_start"] = int(line_match.group(1)) if line_match else 0
-        f["line_end"] = f["line_start"]
-
-        evidence_match = re.search(
-            r'Evidence:\s*(.+?)(?=\n(?:Impact|Recommended|Finding ID:|\Z))', block, re.DOTALL)
-        f["description"] = evidence_match.group(1).strip()[:500] if evidence_match else ""
-
-        fix_match = re.search(
-            r'Recommended fix:\s*(.+?)(?=\n(?:Finding ID:|\Z))', block, re.DOTALL)
-        f["recommendation"] = fix_match.group(1).strip()[:300] if fix_match else ""
-
-        conf_match = re.search(r'Confidence:\s*(\w+)', block, re.IGNORECASE)
-        f["confidence"] = {"high": 0.9, "medium": 0.7, "low": 0.5}.get(
-            conf_match.group(1).lower() if conf_match else "medium", 0.7)
-
-        findings.append(f)
     return findings
+
+
+def _parse_adversarial_block(block, finding_id, source):
+    f = {"id": finding_id, "source": source, "origin": "ai",
+         "category": "ai-review", "detected_by": [source], "triage": {}}
+
+    sev_match = re.search(r'Severity:\s*(\w+)', block, re.IGNORECASE)
+    if sev_match:
+        sev = sev_match.group(1).lower()
+        f["severity"] = {"critical": "critical", "important": "high", "high": "high",
+                         "medium": "medium", "minor": "low"}.get(sev, "medium")
+    else:
+        f["severity"] = "medium"
+
+    title_match = re.search(r'Title:\s*(.+?)(?:\n|$)', block)
+    f["title"] = title_match.group(1).strip() if title_match else f["id"]
+    f["rule_id"] = f["id"]
+
+    file_match = re.search(r'File:\s*`?([^\n`]+)`?', block)
+    f["file"] = file_match.group(1).strip() if file_match else ""
+
+    line_match = re.search(r'Lines?:\s*(\d+)', block)
+    f["line_start"] = int(line_match.group(1)) if line_match else 0
+    f["line_end"] = f["line_start"]
+
+    evidence_match = re.search(
+        r'Evidence:\s*(.+?)(?=\n(?:Impact|Recommended|Finding ID:|\Z))', block, re.DOTALL)
+    f["description"] = evidence_match.group(1).strip()[:500] if evidence_match else ""
+
+    fix_match = re.search(
+        r'Recommended fix:\s*(.+?)(?=\n(?:Finding ID:|\Z))', block, re.DOTALL)
+    f["recommendation"] = fix_match.group(1).strip()[:300] if fix_match else ""
+
+    conf_match = re.search(r'Confidence:\s*(\w+)', block, re.IGNORECASE)
+    f["confidence"] = {"high": 0.9, "medium": 0.7, "low": 0.5}.get(
+        conf_match.group(1).lower() if conf_match else "medium", 0.7)
+
+    return f
+
+
+def _parse_semantic_block(block, title, source, index):
+    """Parse semantic-scan format: ### N. Title with **Field**: value."""
+    f = {"id": f"SCAN-{index:03d}", "source": source, "origin": "ai",
+         "category": "ai-review", "detected_by": [source], "triage": {},
+         "title": title, "rule_id": f"SCAN-{index:03d}"}
+
+    sev_match = re.search(r'\*\*Severity\*\*:\s*(\w+)', block, re.IGNORECASE)
+    if sev_match:
+        sev = sev_match.group(1).lower()
+        f["severity"] = {"critical": "critical", "high": "high",
+                         "medium": "medium", "low": "low"}.get(sev, "medium")
+    else:
+        f["severity"] = "medium"
+
+    file_match = re.search(r'\*\*File\*\*:\s*`?([^`\n]+)`?', block)
+    if file_match:
+        raw = file_match.group(1).strip()
+        f["file"] = raw.split(",")[0].split("(")[0].strip()
+
+    line_match = re.search(r':(\d+)', f.get("file", ""))
+    if line_match:
+        f["line_start"] = int(line_match.group(1))
+        f["file"] = f["file"].split(":")[0]
+    else:
+        f["line_start"] = 0
+    f["line_end"] = f["line_start"]
+
+    conf_match = re.search(r'\*\*Confidence\*\*:\s*([\d.]+)', block)
+    f["confidence"] = float(conf_match.group(1)) if conf_match else 0.7
+
+    desc_match = re.search(r'(?:Description|Impact|Details).*?:\s*(.+?)(?=\n\*\*|\n###|\Z)', block, re.DOTALL | re.IGNORECASE)
+    f["description"] = desc_match.group(1).strip()[:500] if desc_match else ""
+
+    fix_match = re.search(r'(?:Remediation|Fix|Recommendation).*?:\s*(.+?)(?=\n###|\Z)', block, re.DOTALL | re.IGNORECASE)
+    f["recommendation"] = fix_match.group(1).strip()[:300] if fix_match else ""
+
+    return f
 
 
 def _file_key(filepath):
