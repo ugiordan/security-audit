@@ -248,29 +248,34 @@ def load_ai_findings(scan_dir):
 
 
 MUSTFIX_HTML_STYLE = """
+@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&family=Roboto+Mono:wght@400&display=swap');
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { font: 14px/1.6 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0d1117; color: #c9d1d9; max-width: 1000px; margin: 0 auto; padding: 32px 40px; }
-h1 { font-size: 24px; margin-bottom: 8px; color: #f0f6fc; }
-h2 { font-size: 18px; margin: 28px 0 12px; color: #f0f6fc; padding-bottom: 8px; border-bottom: 1px solid #30363d; }
-.meta { color: #8b949e; font-size: 13px; margin-bottom: 24px; }
-.fix-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px 20px; margin: 12px 0; }
-.fix-header { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
-.fix-title { font-size: 15px; font-weight: 600; color: #f0f6fc; }
-.badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; color: #fff; }
-.badge-critical { background: #dc3545; }
-.badge-high { background: #fd7e14; }
-.badge-medium { background: #ffc107; color: #000; }
-.badge-source { background: #30363d; color: #8b949e; font-weight: 400; }
-.fix-body { font-size: 13px; color: #c9d1d9; }
+body { font: 16px/1.6 Roboto,-apple-system,BlinkMacSystemFont,sans-serif; background: #fff; color: rgba(0,0,0,.87); }
+.top-bar { background: #000; color: #fff; padding: 0 24px; height: 48px; display: flex; align-items: center; gap: 12px; }
+.top-bar h1 { font-size: 16px; font-weight: 400; margin: 0; color: #fff; }
+.top-bar .meta { font-size: 11px; color: rgba(255,255,255,.5); margin-left: auto; }
+.content { max-width: 900px; margin: 0 auto; padding: 24px 20px; }
+h2 { font-size: 1.25rem; font-weight: 300; color: rgba(0,0,0,.87); margin: 24px 0 12px; border-bottom: 1px solid rgba(0,0,0,.12); padding-bottom: 8px; }
+.summary { color: rgba(0,0,0,.54); font-size: 14px; margin-bottom: 20px; }
+.fix-card { background: #fff; border: 1px solid rgba(0,0,0,.12); border-radius: 2px; padding: 16px 20px; margin: 12px 0; box-shadow: 0 1px 2px rgba(0,0,0,.05); }
+.fix-card:hover { box-shadow: 0 2px 6px rgba(0,0,0,.1); }
+.fix-header { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.fix-title { font-size: 15px; font-weight: 500; color: rgba(0,0,0,.87); }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 2px; font-size: 11px; font-weight: 500; color: #fff; letter-spacing: .3px; }
+.badge-critical { background: #c62828; }
+.badge-high { background: #e65100; }
+.badge-medium { background: #f9a825; color: rgba(0,0,0,.87); }
+.badge-source { background: rgba(0,0,0,.06); color: rgba(0,0,0,.54); font-weight: 400; }
+.fix-body { font-size: 14px; color: rgba(0,0,0,.6); }
 .fix-body p { margin: 6px 0; }
-.fix-body code { background: #21262d; padding: 2px 6px; border-radius: 3px; font-size: 12px; }
+.fix-body code { background: rgba(0,0,0,.05); padding: 2px 6px; border-radius: 2px; font-size: 12px; font-family: 'Roboto Mono', monospace; }
 .fix-body ul { padding-left: 20px; margin: 4px 0; }
-.fix-body .label { color: #8b949e; font-weight: 600; text-transform: uppercase; font-size: 11px; }
+.fix-body .label { color: rgba(0,0,0,.54); font-weight: 500; text-transform: uppercase; font-size: 11px; letter-spacing: .3px; }
 table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px; }
-th { background: #161b22; padding: 8px 10px; text-align: left; border-bottom: 2px solid #30363d; color: #8b949e; font-weight: 600; text-transform: uppercase; font-size: 11px; }
-td { padding: 6px 10px; border-bottom: 1px solid #21262d; }
-tr:hover { background: #161b22; }
-.footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #30363d; color: #8b949e; font-size: 12px; }
+th { background: rgba(0,0,0,.04); padding: 8px 10px; text-align: left; border-bottom: 1px solid rgba(0,0,0,.12); color: rgba(0,0,0,.54); font-weight: 500; text-transform: uppercase; font-size: 11px; }
+td { padding: 6px 10px; border-bottom: 1px solid rgba(0,0,0,.06); }
+tr:hover { background: rgba(0,0,0,.02); }
+.footer { margin-top: 32px; padding: 16px 0; border-top: 1px solid rgba(0,0,0,.12); color: rgba(0,0,0,.38); font-size: 12px; }
 """
 
 
@@ -283,7 +288,7 @@ def generate_mustfix_html(findings, ai_findings, metadata, min_severity="high"):
     fixes = _group_findings(all_combined, repo_short, min_severity)
 
     if not fixes:
-        return f"<html><body style='background:#0d1117;color:#c9d1d9;padding:40px'><h1>No must-fix items at {min_severity.upper()}+ severity</h1></body></html>"
+        return f"<html><body style='background:#fff;color:rgba(0,0,0,.87);padding:40px'><h1>No must-fix items at {min_severity.upper()}+ severity</h1></body></html>"
 
     sev_badge = lambda s: f'<span class="badge badge-{s}">{s.upper()}</span>'
 
@@ -296,8 +301,9 @@ def generate_mustfix_html(findings, ai_findings, metadata, min_severity="high"):
         rec = escape(fix.get("recommendation", "")) if fix.get("recommendation") else ""
         rec_html = f'<p><span class="label">Fix:</span> {rec}</p>' if rec else ""
 
+        sev_colors = {"critical": "#c62828", "high": "#e65100", "medium": "#f9a825"}
         cards.append(f"""
-        <div class="fix-card" style="border-left: 4px solid {'#dc3545' if fix['severity']=='critical' else '#fd7e14' if fix['severity']=='high' else '#ffc107'}">
+        <div class="fix-card" style="border-left: 4px solid {sev_colors.get(fix['severity'], '#757575')}">
             <div class="fix-header">
                 <span style="color:#8b949e;font-weight:600">Fix {i}</span>
                 {sev_badge(fix['severity'])}
@@ -327,12 +333,13 @@ def generate_mustfix_html(findings, ai_findings, metadata, min_severity="high"):
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Must-Fix: {escape(repo_short)}</title>
 <style>{MUSTFIX_HTML_STYLE}</style></head><body>
-<h1>Must-Fix: {escape(repo_short)}</h1>
-<div class="meta">
-    {escape(repo)} | Branch: {escape(metadata.get('branch','main'))} |
-    {escape(str(metadata.get('date','')))} |
-    {len(fixes)} items ({sast_count} SAST, {ai_count} AI review)
+<div class="top-bar">
+    <h1>Must-Fix Security Items</h1>
+    <span style="color:rgba(255,255,255,.7)">{escape(repo_short)}</span>
+    <span class="meta">{escape(metadata.get('branch','main'))} | {len(fixes)} items ({sast_count} SAST, {ai_count} AI)</span>
 </div>
+<div class="content">
+<div class="summary">{escape(repo)} | {len(fixes)} findings at {min_severity.upper()} severity or above</div>
 
 {''.join(cards)}
 
@@ -342,8 +349,9 @@ def generate_mustfix_html(findings, ai_findings, metadata, min_severity="high"):
 <tbody>{''.join(summary_rows)}</tbody>
 </table>
 
-<p style="color:#8b949e;margin-top:16px"><strong>Total:</strong> {len(fixes)} must-fix items, {sum(f['file_count'] for f in fixes)} file locations</p>
+<p style="color:rgba(0,0,0,.54);margin-top:16px"><strong>Total:</strong> {len(fixes)} must-fix items, {sum(f['file_count'] for f in fixes)} file locations</p>
 <div class="footer">Generated by RHOAI Security Audit</div>
+</div>
 </body></html>"""
 
 
