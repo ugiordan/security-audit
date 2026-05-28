@@ -15,20 +15,19 @@ SEVERITY_MAP = {
 }
 
 def _clean_rule_id(check_id):
-    """Strip local filesystem paths from semgrep check_id, keep just the rule name."""
+    """Strip local filesystem path prefix from semgrep check_id, keep the rule name."""
     if not check_id:
         return ""
+    # Local config rules have the path baked in: Users.name..cache...configs.semgrep.<rule-name>
+    # Strip everything up to and including the last "semgrep." or "configs." segment
     parts = check_id.split(".")
-    # If it looks like a path (contains Users, home, cache, configs, etc), take the last segments
-    path_markers = {"Users", "home", "cache", "plugins", "configs", "semgrep", "skills"}
-    if any(p in path_markers for p in parts):
-        # Find the last meaningful segment(s) after the config path
+    for marker in ["semgrep", "configs"]:
         for i in range(len(parts) - 1, -1, -1):
-            if parts[i] in path_markers or parts[i].startswith("ugiordan"):
-                return "-".join(parts[i + 1:]) if i + 1 < len(parts) else parts[-1]
-    # Standard semgrep registry rules: keep the last 2-3 segments
-    if len(parts) > 3:
-        return ".".join(parts[-3:])
+            if parts[i] == marker and i + 1 < len(parts):
+                remainder = ".".join(parts[i + 1:])
+                if remainder and not remainder.startswith("Users") and not remainder.startswith("/"):
+                    return remainder
+    # If no path markers found, return as-is (registry rules, single-word rules)
     return check_id
 
 
