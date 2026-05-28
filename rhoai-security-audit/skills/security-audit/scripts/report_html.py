@@ -339,9 +339,10 @@ def generate_html(scan_dirs):
     # Finding sections
     repo_short = first_meta.get("repo", "").split("/")[-1] if not multi else ""
     repo_full = first_meta.get("repo", "") if not multi else ""
-    # Use commit SHA for stable permalinks (branch HEAD may have moved)
-    commit = first_meta.get("commit", "")
-    branch = commit if commit else first_meta.get("branch", "main")
+    # SAST findings use commit SHA (exact match to scanned code)
+    # AI findings use branch name (agents read from local checkout at HEAD)
+    commit_ref = first_meta.get("commit", "")
+    branch_ref = first_meta.get("branch", "main")
 
     sca_section = ""
     sca_findings = [f for f in all_findings if f.get("category") == "sca"]
@@ -349,7 +350,7 @@ def generate_html(scan_dirs):
         sca_section = f"""
         <section id="cves">
             <h2>Dependency Vulnerabilities ({len(sca_findings)})</h2>
-            {_render_findings_table(sca_findings, repo_short, repo_full=repo_full, branch=branch)}
+            {_render_findings_table(sca_findings, repo_short, repo_full=repo_full, branch=commit_ref or branch_ref)}
         </section>"""
 
     secrets_section = ""
@@ -358,7 +359,7 @@ def generate_html(scan_dirs):
         secrets_section = f"""
         <section id="secrets">
             <h2>Secrets Detected ({len(secret_findings)})</h2>
-            {_render_findings_table(secret_findings, repo_short, show_detected_by=False, repo_full=repo_full, branch=branch)}
+            {_render_findings_table(secret_findings, repo_short, show_detected_by=False, repo_full=repo_full, branch=commit_ref or branch_ref)}
         </section>"""
 
     # AI Review section
@@ -369,7 +370,7 @@ def generate_html(scan_dirs):
         ai_rows = []
         for i, f in enumerate(ai_findings, 1):
             file_link = _github_link(f.get("file", ""), f.get("line_start", 0),
-                                     f.get("line_end", 0), repo_full, branch)
+                                     f.get("line_end", 0), repo_full, branch_ref)
             sev = _sev_badge(f["severity"])
             ftitle = escape(f.get("title", "")[:80])
             snippet = _snippet_block(f.get("snippet", ""))
@@ -393,13 +394,13 @@ def generate_html(scan_dirs):
     crit_section = f"""
     <section id="critical">
         <h2>Critical SAST Findings ({len(crit_findings)})</h2>
-        {_render_findings_table(crit_findings, repo_short, repo_full=repo_full, branch=branch)}
+        {_render_findings_table(crit_findings, repo_short, repo_full=repo_full, branch=commit_ref or branch_ref)}
     </section>""" if crit_findings else ""
 
     high_section = f"""
     <section id="high">
         <h2>High SAST Findings ({len(high_findings)})</h2>
-        {_render_findings_table(high_findings, repo_short, repo_full=repo_full, branch=branch)}
+        {_render_findings_table(high_findings, repo_short, repo_full=repo_full, branch=commit_ref or branch_ref)}
     </section>""" if high_findings else ""
 
     # Multi-repo sections
