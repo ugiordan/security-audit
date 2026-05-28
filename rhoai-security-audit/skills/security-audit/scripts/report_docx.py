@@ -99,9 +99,18 @@ def _github_url(filepath, line_start, line_end, repo_full, ref):
 def _add_hyperlink(paragraph, url, text):
     """Add a clickable hyperlink to a paragraph."""
     from docx.opc.constants import RELATIONSHIP_TYPE as RT
+    from lxml import etree
     part = paragraph.part
     r_id = part.relate_to(url, RT.HYPERLINK, is_external=True)
-    from lxml import etree
+
+    # Fix: python-docx encodes # to %23 in relationship targets.
+    # Patch the relationship XML directly to preserve fragment identifiers.
+    if "#" in url:
+        for rel in part.rels.values():
+            if rel.rId == r_id and "%23" in (rel.target_ref or ""):
+                rel._target = url
+                break
+
     hyperlink = etree.SubElement(paragraph._element, qn("w:hyperlink"))
     hyperlink.set(qn("r:id"), r_id)
     run_elem = etree.SubElement(hyperlink, qn("w:r"))
