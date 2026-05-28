@@ -56,6 +56,13 @@ def load_metadata(scan_dir):
     f = p / "scan-metadata.json"
     if f.exists():
         meta = json.loads(f.read_text())
+    # Also try security-summary.json
+    ss = p / "raw" / "security-summary.json"
+    if ss.exists() and not meta:
+        try:
+            meta = json.loads(ss.read_text())
+        except Exception:
+            pass
     ci = p / "raw" / "commit-info.json"
     if ci.exists():
         try:
@@ -66,6 +73,14 @@ def load_metadata(scan_dir):
                 meta["commit"] = info.get("commit_sha", "")
         except Exception:
             pass
+    # Infer repo from output path: output/<repo-short>/<date>/
+    if not meta.get("repo"):
+        parts = Path(scan_dir).resolve().parts
+        for i, part in enumerate(parts):
+            if part == "output" and i + 1 < len(parts):
+                repo_short = parts[i + 1]
+                meta["repo"] = f"opendatahub-io/{repo_short}"
+                break
     return meta
 
 
