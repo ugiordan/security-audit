@@ -154,17 +154,19 @@ def _sev_badge(sev):
 
 
 def _github_link(filepath, line_start, line_end, repo_full="", branch="main"):
-    """Build a GitHub permalink for a finding's source location."""
+    """Build a GitHub permalink with file:line display."""
     if not repo_full or not filepath:
-        return f"<code>{escape(filepath)}</code>"
-    # Strip repos/<name>/ prefix from SAST paths for the URL
+        display = filepath
+        if line_start:
+            display = f"{filepath}:{line_start}"
+        return f"<code>{escape(display)}</code>"
     url_path = filepath
     parts = filepath.replace("\\", "/").split("/")
     for i, p in enumerate(parts):
         if p in ("repo", "repos"):
             url_path = "/".join(parts[i + 2:]) if i + 2 <= len(parts) else filepath
             break
-    display = url_path
+    display = f"{url_path}:{line_start}" if line_start else url_path
     frag = f"#L{line_start}" if line_start else ""
     if line_end and line_end != line_start and line_start:
         frag = f"#L{line_start}-L{line_end}"
@@ -199,9 +201,8 @@ def _render_findings_table(findings, repo_short, show_detected_by=True, repo_ful
         sev = _sev_badge(f["severity"])
         snippet = _snippet_block(f.get("snippet", ""))
         det_col = f"<td>{escape(det)}</td>" if show_detected_by else ""
-        line_display = f"{line}" if line else ""
         rows.append(f"<tr><td>{i}</td><td>{sev}</td><td>{src}</td>"
-                     f"<td>{file_link}</td><td>{line_display}</td>"
+                     f"<td>{file_link}</td>"
                      f"<td>{ftitle}{snippet}</td>{det_col}"
                      f"<td>{rec}</td></tr>")
     overflow = ""
@@ -209,7 +210,7 @@ def _render_findings_table(findings, repo_short, show_detected_by=True, repo_ful
         overflow = f"<p class='overflow'>+{len(findings) - 100} more findings not shown</p>"
     det_header = "<th>Detected By</th>" if show_detected_by else ""
     return f"""<table>
-<thead><tr><th>#</th><th>Severity</th><th>Tool</th><th>File</th><th>Line</th><th>Title</th>{det_header}<th>Recommendation</th></tr></thead>
+<thead><tr><th>#</th><th>Severity</th><th>Tool</th><th>File</th><th>Title</th>{det_header}<th>Recommendation</th></tr></thead>
 <tbody>{''.join(rows)}</tbody>
 </table>{overflow}"""
 
@@ -277,10 +278,17 @@ def generate_html(scan_dirs):
             repo = m.get("repo", "?").split("/")[-1]
             nav_items.append(f'<a href="#repo-{escape(repo)}">{escape(repo)}</a>')
 
-    # Tool x severity matrix
+    # Tool x severity matrix: include all tools that ran (even with 0 findings)
     tool_sev = defaultdict(Counter)
-    for f in all_findings:
+    for f in combined:
         tool_sev[f.get("source", "unknown")][f["severity"]] += 1
+
+    # Add tools from metadata that had zero findings
+    meta_findings = first_meta.get("findings", {})
+    for tool_key, count in meta_findings.items():
+        tool_name = tool_key.replace("_", "-")
+        if tool_name not in tool_sev:
+            tool_sev[tool_name] = Counter()
 
     tool_rows = []
     for tool in sorted(tool_sev.keys()):
@@ -290,7 +298,8 @@ def generate_html(scan_dirs):
             f'<td class="sev-{sev}">{s.get(sev,0) or ""}</td>'
             for sev in ["critical", "high", "medium", "low", "info"]
         )
-        tool_rows.append(f"<tr><td><strong>{escape(tool)}</strong></td>{cells}<td><strong>{t}</strong></td></tr>")
+        style = ' style="color:#4a5568"' if t == 0 else ""
+        tool_rows.append(f"<tr{style}><td><strong>{escape(tool)}</strong></td>{cells}<td><strong>{t}</strong></td></tr>")
 
     # Category summary
     cat_rows = []
@@ -330,7 +339,9 @@ def generate_html(scan_dirs):
     # Finding sections
     repo_short = first_meta.get("repo", "").split("/")[-1] if not multi else ""
     repo_full = first_meta.get("repo", "") if not multi else ""
-    branch = first_meta.get("branch", "main")
+    # Use commit SHA for stable permalinks (branch HEAD may have moved)
+    commit = first_meta.get("commit", "")
+    branch = commit if commit else first_meta.get("branch", "main")
 
     sca_section = ""
     sca_findings = [f for f in all_findings if f.get("category") == "sca"]
@@ -364,15 +375,14 @@ def generate_html(scan_dirs):
             snippet = _snippet_block(f.get("snippet", ""))
             desc = escape(f.get("description", "")[:200])
             rec = escape(f.get("recommendation", "")[:200])
-            line_display = f.get("line_start", "") or ""
-            ai_rows.append(f"""<tr><td>{escape(f['id'])}</td><td>{sev}</td><td>{file_link}</td><td>{line_display}</td>
+            ai_rows.append(f"""<tr><td>{escape(f['id'])}</td><td>{sev}</td><td>{file_link}</td>
                 <td>{ftitle}{snippet}</td><td style="font-size:12px">{desc}</td><td style="font-size:12px">{rec}</td></tr>""")
         ai_section = f"""
     <section id="ai-review">
         <h2>AI Review Findings ({len(ai_findings)})</h2>
         <p style="color:#8b949e;margin-bottom:12px">Findings from adversarial multi-agent review and semantic security analysis. These are code-level issues that require semantic understanding beyond pattern matching.</p>
         <table>
-        <thead><tr><th>ID</th><th>Severity</th><th>File</th><th>Line</th><th>Title</th><th>Evidence</th><th>Fix</th></tr></thead>
+        <thead><tr><th>ID</th><th>Severity</th><th>File</th><th>Title</th><th>Evidence</th><th>Fix</th></tr></thead>
         <tbody>{''.join(ai_rows)}</tbody>
         </table>
     </section>"""
