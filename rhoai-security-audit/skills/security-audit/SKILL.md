@@ -101,11 +101,42 @@ else
 fi
 ```
 
-After it completes, invoke the semantic scanner:
+After it completes, invoke the semantic scanner. The scanner's
+UserPromptSubmit hook does NOT fire when invoked via Skill(), so
+create the workspace manually first:
+
+```bash
+SCAN_TS=$(date -u +%Y-%m-%d-%H%M%S)
+SCAN_WS=".security-scan/security-scan-${SCAN_TS}"
+mkdir -p "${SCAN_WS}"
+git clone --depth 1 "https://github.com/${REPO}.git" "${SCAN_WS}/repo" 2>/dev/null || true
+python3 -c "
+import json
+json.dump({'repo_url': 'https://github.com/${REPO}', 'repo_name': '${REPO_SHORT}',
+           'scan_id': 'security-scan-${SCAN_TS}'}, open('${SCAN_WS}/scan-metadata.json','w'), indent=2)
+"
+cat > "${SCAN_WS}/repo-analysis.md" << 'TMPL'
+# Repository Analysis
+## Repository Overview
+<!-- FILL -->
+## File Inventory
+<!-- FILL -->
+## Technology Stack
+<!-- FILL -->
+## Security-Relevant Patterns
+<!-- FILL -->
+TMPL
+SCAN_WS_ABS="$(cd "${SCAN_WS}" && pwd)"
+```
+
+Then invoke with the workspace path:
 
 ```
 Skill(skill="rhoai-security-scanner:audit", args="${REPO}")
 ```
+
+After invoking, tell the scanner the workspace path:
+`<workspace>${SCAN_WS_ABS}</workspace>`
 
 Copy outputs to `${OUTPUT_DIR}/raw/semantic-scan/`.
 
