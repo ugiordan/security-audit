@@ -56,10 +56,42 @@ def load_findings(scan_dir):
 
 
 def load_metadata(scan_dir):
-    f = Path(scan_dir) / "scan-metadata.json"
+    p = Path(scan_dir)
+    meta = {}
+    f = p / "scan-metadata.json"
     if f.exists():
-        return json.loads(f.read_text())
-    return {}
+        meta = json.loads(f.read_text())
+    ss = p / "raw" / "security-summary.json"
+    if ss.exists() and not meta.get("repo"):
+        try:
+            summary = json.loads(ss.read_text())
+            meta.setdefault("repo", summary.get("repo", ""))
+            meta.setdefault("date", summary.get("scan_date", ""))
+            meta.setdefault("findings", summary.get("findings", {}))
+        except Exception:
+            pass
+    ci = p / "raw" / "commit-info.json"
+    if ci.exists():
+        try:
+            info = json.loads(ci.read_text())
+            if not meta.get("branch"):
+                meta["branch"] = info.get("default_branch", "main")
+            if not meta.get("commit"):
+                meta["commit"] = info.get("commit_sha", "")
+        except Exception:
+            pass
+    if not meta.get("repo"):
+        parts = Path(scan_dir).resolve().parts
+        for i, part in enumerate(parts):
+            if part == "output" and i + 1 < len(parts):
+                meta["repo"] = f"opendatahub-io/{parts[i + 1]}"
+                break
+    if not meta.get("date"):
+        for part in Path(scan_dir).resolve().parts:
+            if len(part) == 10 and part[4] == "-" and part[7] == "-":
+                meta["date"] = part
+                break
+    return meta
 
 
 def shorten_path(filepath, repo_name=""):
@@ -166,14 +198,31 @@ markdown_extensions:
   - pymdownx.tasklist:
       custom_checkbox: true
 
+extra_css:
+  - custom.css
+
 {nav_entries}
 """
     (Path(docs_dir).parent / "mkdocs.yml").write_text(yml)
+
+    # Write custom CSS to hide empty table header rows
+    css = """\
+/* Hide empty header rows in metadata tables */
+.md-typeset table:not([class]) thead th:empty {
+  display: none;
+}
+.md-typeset table:not([class]) thead:has(th:empty) {
+  display: none;
+}
+"""
+    (Path(docs_dir) / "custom.css").write_text(css)
 
 
 def generate_index(findings, metadata, repo_full, branch):
     total = len(findings)
     sev_counts = Counter(f["severity"] for f in findings)
+    non_sca = [f for f in findings if f.get("category") != "sca"]
+    non_sca_sev = Counter(f["severity"] for f in non_sca)
     tool_counts = Counter(f.get("source", "unknown") for f in findings)
     triage_counts = Counter(_get_triage(f) for f in findings)
     cat_counts = Counter(f.get("category", "other") for f in findings)
@@ -225,8 +274,8 @@ hide:
 | | |
 |---|---|
 | **Repository** | [{repo_full}](https://github.com/{repo_full}) |
-| **Branch** | `{branch}` |
-| **Commit** | `{commit}` |
+| **Branch** | [`{branch}`](https://github.com/{repo_full}/tree/{branch}) |
+| **Commit** | [`{commit}`](https://github.com/{repo_full}/commit/{commit}) |
 | **Scan Date** | {scan_date} |
 | **Tools** | {len(tool_counts)} |
 | **Total Findings** | {total} |
@@ -237,25 +286,25 @@ hide:
 
 <div class="grid cards" markdown>
 
--   :material-alert-circle: **{sev_counts.get("critical", 0)} Critical**
+-   :material-alert-circle: **[{sev_counts.get("critical", 0)} Critical](critical-high.html#critical)**
 
     ---
 
     Immediate action required
 
--   :material-alert: **{sev_counts.get("high", 0)} High**
+-   :material-alert: **[{sev_counts.get("high", 0)} High](critical-high.html#high)**
 
     ---
 
     Fix before next release
 
--   :material-alert-outline: **{sev_counts.get("medium", 0)} Medium**
+-   :material-alert-outline: **[{sev_counts.get("medium", 0)} Medium](all-findings.html#medium-{non_sca_sev.get("medium", 0)})**
 
     ---
 
     Address in upcoming sprint
 
--   :material-information: **{sev_counts.get("low", 0) + sev_counts.get("info", 0)} Low/Info**
+-   :material-information: **[{sev_counts.get("low", 0) + sev_counts.get("info", 0)} Low/Info](all-findings.html#low-{non_sca_sev.get("low", 0)})**
 
     ---
 
@@ -265,7 +314,7 @@ hide:
 
 !!! danger "Must-Fix Items: {must_fix}"
     {must_fix} findings at **HIGH** or above require immediate attention.
-    See [Critical & High findings](critical-high.md) for details.
+    See [Critical & High findings](critical-high.html) for details.
 
 ## Severity Breakdown
 
@@ -275,9 +324,9 @@ hide:
 
 | Triage Status | Count | Description |
 |---------------|-------|-------------|
-| :green_circle: Corroborated | {corr} | Found by both SAST tools and AI analysis |
-| :blue_circle: AI-only | {ai_only} | Found by AI semantic analysis only |
-| :white_circle: SAST-only | {sast_only} | Found by traditional SAST tools only |
+| :material-check-decagram: **Corroborated** | {corr} | Independently confirmed by both SAST tools and AI review |
+| :material-brain: **AI-only** | {ai_only} | Found by AI review only, requires manual verification |
+| **SAST-only** | {sast_only} | Found by traditional SAST tools only |
 
 ## Categories
 
@@ -286,6 +335,20 @@ hide:
 ## Tools
 
 {tool_table}
+
+## About This Report
+
+This report was generated by the **RHOAI Security Audit** pipeline:
+
+1. **SAST Scan**: {len(tool_counts)} tools (semgrep, trivy, grype, osv-scanner, kube-linter, zizmor, and others) scan the repository for known vulnerabilities, misconfigurations, and code patterns.
+2. **AI Review**: Adversarial multi-agent review (5 specialist agents: SEC, PERF, QUAL, CORR, ARCH) and semantic security analysis identify logic flaws, race conditions, and design-level issues that SAST tools cannot detect.
+3. **Triage**: Findings from both sources are cross-correlated. Issues found by both SAST and AI are marked as **corroborated** (highest confidence). AI-only findings are flagged for manual review.
+
+**Triage badges:**
+
+- :material-check-decagram: **CORROBORATED**: found independently by both SAST tools and AI review
+- :material-brain: **AI-only**: found by AI review only (logic/semantic issue)
+- No badge: found by SAST tools only
 
 ---
 
@@ -361,30 +424,144 @@ def generate_dependencies(findings, repo_full, branch):
     return md
 
 
-def generate_tools(findings):
+def generate_tools(findings, metadata=None):
+    AI_SOURCES = {"adversarial-review", "semantic-scan"}
+
     tool_sev = defaultdict(Counter)
     for f in findings:
         tool_sev[f.get("source", "unknown")][f["severity"]] += 1
 
+    # Add tools that ran but produced zero findings
+    if metadata:
+        meta_findings = metadata.get("findings", {})
+        for tk in meta_findings:
+            tn = tk.replace("_", "-")
+            if tn not in tool_sev:
+                tool_sev[tn] = Counter()
+
+    sast_tools = {k: v for k, v in tool_sev.items() if k not in AI_SOURCES}
+    ai_tools = {k: v for k, v in tool_sev.items() if k in AI_SOURCES}
+
+    sast_count = len(sast_tools)
+    ai_count = len(ai_tools)
+
     md = "# Tool Coverage\n\n"
-    md += "## Findings by Tool and Severity\n\n"
-    md += "| Tool | Critical | High | Medium | Low | Info | Total |\n"
-    md += "|------|----------|------|--------|-----|------|-------|\n"
+    md += f"**{sast_count} SAST tools** and **{ai_count} AI skills** executed during this scan.\n\n"
 
-    for tool in sorted(tool_sev):
-        s = tool_sev[tool]
-        t = sum(s.values())
-        cells = " | ".join(str(s.get(sv, 0) or "") for sv in SEV_ORDER)
-        md += f"| **{tool}** | {cells} | **{t}** |\n"
+    # Split SAST tools into those with findings and those without
+    sast_with = {k: v for k, v in sast_tools.items() if sum(v.values()) > 0}
+    sast_clean = sorted(k for k, v in sast_tools.items() if sum(v.values()) == 0)
 
-    # Total row
-    totals = Counter()
-    for s in tool_sev.values():
-        totals.update(s)
-    total_cells = " | ".join(str(totals.get(sv, 0)) for sv in SEV_ORDER)
-    md += f"| **TOTAL** | {total_cells} | **{sum(totals.values())}** |\n"
+    # SAST section: tools with findings
+    md += "## SAST Tools\n\n"
+    md += "Static analysis tools scanning for known vulnerabilities, misconfigurations, and code patterns.\n\n"
+
+    if sast_with:
+        md += "### Findings\n\n"
+        md += "| Tool | Critical | High | Medium | Low | Info | Total |\n"
+        md += "|------|----------|------|--------|-----|------|-------|\n"
+
+        sast_totals = Counter()
+        for tool in sorted(sast_with):
+            s = sast_with[tool]
+            t = sum(s.values())
+            cells = " | ".join(str(s.get(sv, 0) or "") for sv in SEV_ORDER)
+            md += f"| **{tool}** | {cells} | **{t}** |\n"
+            sast_totals.update(s)
+
+        sast_total_cells = " | ".join(str(sast_totals.get(sv, 0)) for sv in SEV_ORDER)
+        md += f"| **Total** | {sast_total_cells} | **{sum(sast_totals.values())}** |\n"
+        md += "\n"
+
+    if sast_clean:
+        md += f"### Clean ({len(sast_clean)} tools, no findings)\n\n"
+        md += ", ".join(f"**{t}**" for t in sast_clean) + "\n\n"
+
+    # AI section
+    if ai_tools:
+        # Triage stats for AI findings
+        ai_findings = [f for f in findings if f.get("source", "") in AI_SOURCES]
+        ai_triage = Counter(
+            f.get("triage", {}).get("status", "ai-only") if isinstance(f.get("triage"), dict) else "ai-only"
+            for f in ai_findings
+        )
+        corr = ai_triage.get("corroborated", 0)
+        ai_only = ai_triage.get("ai-only", 0)
+
+        md += "## AI Skills\n\n"
+        md += "Multi-agent AI review identifying logic flaws, race conditions, and design-level issues beyond pattern matching.\n\n"
+        md += "| Skill | Critical | High | Medium | Low | Info | Total |\n"
+        md += "|-------|----------|------|--------|-----|------|-------|\n"
+
+        ai_totals = Counter()
+        for tool in sorted(ai_tools):
+            s = ai_tools[tool]
+            t = sum(s.values())
+            cells = " | ".join(str(s.get(sv, 0) or "") for sv in SEV_ORDER)
+            md += f"| **{tool}** | {cells} | **{t}** |\n"
+            ai_totals.update(s)
+
+        ai_total_cells = " | ".join(str(ai_totals.get(sv, 0)) for sv in SEV_ORDER)
+        md += f"| **AI Total** | {ai_total_cells} | **{sum(ai_totals.values())}** |\n"
+        md += "\n"
+
+        md += "### Triage Quality\n\n"
+        md += "| Metric | Count | Description |\n"
+        md += "|--------|-------|-------------|\n"
+        md += f"| :material-check-decagram: Corroborated | **{corr}** | Independently confirmed by both SAST and AI |\n"
+        md += f"| :material-brain: AI-only | **{ai_only}** | Found by AI only, requires manual review |\n"
+        if corr + ai_only > 0:
+            rate = round(corr / (corr + ai_only) * 100)
+            md += f"| Corroboration rate | **{rate}%** | Higher = more overlap with SAST tools |\n"
+        md += "\n"
 
     return md
+
+
+def _split_description(desc):
+    """Split a description blob into prose, impact, and evidence sections."""
+    import re as _re
+    prose = desc
+    impact = ""
+    evidence = ""
+
+    # Try splitting on "- Impact:" or "**Impact**:" patterns
+    impact_match = _re.search(r'[-*]*\s*\*?\*?Impact\*?\*?:\s*', desc, _re.IGNORECASE)
+    if impact_match:
+        prose = desc[:impact_match.start()].strip()
+        rest = desc[impact_match.end():]
+        # Check if evidence follows
+        evidence_match = _re.search(r'[-*]*\s*\*?\*?Evidence\*?\*?:\s*', rest, _re.IGNORECASE)
+        if evidence_match:
+            impact = rest[:evidence_match.start()].strip()
+            evidence = rest[evidence_match.end():].strip()
+        else:
+            impact = rest.strip()
+    else:
+        # Try splitting on "- Evidence:" alone
+        evidence_match = _re.search(r'[-*]*\s*\*?\*?Evidence\*?\*?:\s*', desc, _re.IGNORECASE)
+        if evidence_match:
+            prose = desc[:evidence_match.start()].strip()
+            evidence = desc[evidence_match.end():].strip()
+
+    # Also split on "Remediation:" if present
+    rem = ""
+    for section in [prose, impact]:
+        rem_match = _re.search(r'[-*]*\s*\*?\*?Remediation\*?\*?:\s*', section, _re.IGNORECASE)
+        if rem_match:
+            rem = section[rem_match.end():].strip()
+            if section == prose:
+                prose = section[:rem_match.start()].strip()
+            else:
+                impact = section[:rem_match.start()].strip()
+            break
+
+    # Clean up leading dashes/bullets
+    prose = _re.sub(r'^[-•]\s*', '', prose).strip()
+    impact = _re.sub(r'^[-•]\s*', '', impact).strip()
+    evidence = _re.sub(r'^[-•]\s*', '', evidence).strip()
+
+    return prose, impact, evidence, rem
 
 
 def _finding_block(f, repo_full, branch):
@@ -398,7 +575,6 @@ def _finding_block(f, repo_full, branch):
     triage = _get_triage(f)
     origin = _get_origin(f)
 
-    # Admonition type based on severity
     admon_type = {
         "critical": "danger",
         "high": "warning",
@@ -407,29 +583,59 @@ def _finding_block(f, repo_full, branch):
         "info": "tip",
     }.get(sev, "note")
 
-    # Triage badge
-    triage_badge = ""
+    triage_row = ""
     if origin == "ai" and triage == "corroborated":
-        triage_badge = " :green_circle: CORROBORATED"
+        triage_row = "    | **Triage** | :material-check-decagram: **CORROBORATED** (confirmed by both SAST and AI) |\n"
     elif origin == "ai":
-        triage_badge = " :blue_circle: AI"
+        triage_row = "    | **Triage** | :material-brain: **AI-only** (found by AI review only) |\n"
 
-    md = f'!!! {admon_type} "{sev.upper()}: {title}"{triage_badge}\n'
-    md += f"    **Source:** {source} | **File:** {file_link}\n\n"
+    md = f'!!! {admon_type} "{title}"\n'
+    md += f"\n"
+    md += f"    | | |\n"
+    md += f"    |:--|:--|\n"
+    md += f"    | **Severity** | **{sev.upper()}** |\n"
+    md += f"    | **Source** | {source} |\n"
+    md += f"    | **File** | {file_link} |\n"
+    md += triage_row
+    md += f"\n"
 
-    if desc:
-        for line in desc.split("\n")[:8]:
+    prose, impact, evidence, desc_rem = _split_description(desc)
+
+    if prose:
+        md += f"    **Description**\n\n"
+        for line in prose.split("\n")[:8]:
             md += f"    {line}\n"
         md += "\n"
 
+    if impact:
+        md += f"    **Impact**\n\n"
+        for line in impact.split("\n")[:6]:
+            md += f"    {line}\n"
+        md += "\n"
+
+    if evidence:
+        md += f"    **Evidence**\n\n"
+        for line in evidence.split("\n")[:6]:
+            eline = line.strip()
+            if eline.startswith("-"):
+                md += f"    {eline}\n"
+            else:
+                md += f"    - {eline}\n"
+        md += "\n"
+
     if snippet:
+        md += "    **Code**\n\n"
         md += "    ```\n"
         for line in snippet.split("\n")[:10]:
             md += f"    {line}\n"
         md += "    ```\n\n"
 
-    if rec:
-        md += f"    **Remediation:** {rec[:300]}\n\n"
+    final_rec = rec or desc_rem
+    if final_rec:
+        md += f"    ??? tip \"Remediation\"\n\n"
+        for line in final_rec[:500].split("\n")[:8]:
+            md += f"        {line}\n"
+        md += "\n"
 
     return md
 
@@ -473,7 +679,7 @@ def build_site(scan_dirs):
     (docs_dir / "critical-high.md").write_text(generate_critical_high(all_findings, repo_full, branch))
     (docs_dir / "all-findings.md").write_text(generate_all_findings(all_findings, repo_full, branch))
     (docs_dir / "dependencies.md").write_text(generate_dependencies(all_findings, repo_full, branch))
-    (docs_dir / "tools.md").write_text(generate_tools(all_findings))
+    (docs_dir / "tools.md").write_text(generate_tools(all_findings, first_meta))
 
     # Build with mkdocs
     site_dir = output_base.resolve() / "security-report-site"
