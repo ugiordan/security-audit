@@ -476,11 +476,25 @@ def main():
         log("No container runtime (podman/docker) found. AI skills will run unsandboxed.", level="WARN")
 
     session_file = step_init(repo, output_dir)
-    step_sast_scan(repo, output_dir, args.branch)
 
-    if not args.skip_ai:
-        step_ai_skills(repo, output_dir, session_file,
-                       sandbox=not args.no_sandbox, no_cache=args.no_cache)
+    if args.skip_ai:
+        step_sast_scan(repo, output_dir, args.branch)
+    else:
+        # Step 2: SAST and AI skills run in parallel
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        log("Step 2: SAST scan + AI skills (parallel)")
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            sast_future = pool.submit(step_sast_scan, repo, output_dir, args.branch)
+            ai_future = pool.submit(
+                step_ai_skills, repo, output_dir, session_file,
+                not args.no_sandbox, args.no_cache,
+            )
+            for future in as_completed([sast_future, ai_future]):
+                try:
+                    future.result()
+                except Exception as e:
+                    log(f"  Step failed: {e}", level="WARN")
 
     step_normalize_dedup_triage(output_dir)
     step_reports(output_dir)
