@@ -26,11 +26,7 @@ from pathlib import Path
 SKILL_DIR = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = SKILL_DIR / "scripts"
 
-CONTAINER_RUNTIME = None
-AI_SANDBOX_IMAGE = os.environ.get(
-    "SECURITY_AUDIT_AI_IMAGE",
-    "quay.io/ugiordan/security-audit-ai:v1.0.0",
-)
+OPENSHELL_POLICY = SCRIPTS_DIR / "openshell-policy.yaml"
 
 AI_SKILLS = [
     {
@@ -71,6 +67,46 @@ def detect_container_runtime():
         if shutil.which(rt):
             return rt
     return None
+
+
+def _ensure_openshell():
+    """Install OpenShell if not present and verify gateway is running."""
+    if shutil.which("openshell"):
+        result = subprocess.run(
+            ["openshell", "status"], capture_output=True, text=True, timeout=10,
+        )
+        if "Connected" in (result.stdout or ""):
+            return True
+        log("  OpenShell installed but gateway not connected", level="WARN")
+        return False
+
+    log("  Installing OpenShell...")
+    if shutil.which("uv"):
+        subprocess.run(
+            ["uv", "tool", "install", "-U", "openshell"],
+            capture_output=True, text=True, timeout=120,
+        )
+    elif shutil.which("pip3"):
+        subprocess.run(
+            ["pip3", "install", "--quiet", "openshell"],
+            capture_output=True, text=True, timeout=120,
+        )
+    else:
+        log("  Cannot install OpenShell (no uv or pip3)", level="WARN")
+        return False
+
+    if not shutil.which("openshell"):
+        log("  OpenShell install failed", level="WARN")
+        return False
+
+    result = subprocess.run(
+        ["openshell", "status"], capture_output=True, text=True, timeout=10,
+    )
+    if "Connected" in (result.stdout or ""):
+        return True
+
+    log("  OpenShell installed but gateway not running. Start with: brew services start openshell", level="WARN")
+    return False
 
 
 def step_init(repo, output_dir):
@@ -205,59 +241,39 @@ def _invoke_ai_skill(repo, skill_id, name, runtime, sandbox):
         "--max-turns", "100",
     ]
 
-    if sandbox and runtime:
-        return _run_in_container(claude_args, runtime, name)
+    if sandbox and _ensure_openshell():
+        return _run_in_openshell(claude_args, name)
     else:
         if sandbox:
-            log(f"  WARNING: No container runtime found, running {name} unsandboxed", level="WARN")
+            log(f"  WARNING: OpenShell not available, running {name} unsandboxed", level="WARN")
         return _run_locally(claude_args)
 
 
-def _ensure_sandbox_network(runtime):
-    """Create a restricted podman/docker network if it doesn't exist."""
-    result = subprocess.run(
-        [runtime, "network", "inspect", "security-audit-sandbox"],
-        capture_output=True, text=True,
-    )
-    if result.returncode == 0:
-        return "security-audit-sandbox"
-
-    result = subprocess.run(
-        [runtime, "network", "create", "--internal", "security-audit-sandbox"],
-        capture_output=True, text=True,
-    )
-    if result.returncode != 0:
-        log(f"  WARNING: Failed to create sandbox network: {result.stderr.strip()}", level="WARN")
-        return None
-    return "security-audit-sandbox"
-
-
-def _run_in_container(claude_args, runtime, name):
-    """Run claude command inside a network-restricted container."""
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        log("  ANTHROPIC_API_KEY not set, cannot run in container", level="ERROR")
-        return False
-
-    container_name = f"security-audit-{name}-{int(time.time())}"
-
-    network = _ensure_sandbox_network(runtime)
+def _run_in_openshell(claude_args, name):
+    """Run claude command inside an OpenShell sandbox with network policy."""
+    policy_file = SCRIPTS_DIR / "openshell-policy.yaml"
+    sandbox_name = f"security-audit-{name}-{int(time.time())}"
 
     cmd = [
-        runtime, "run", "--rm",
-        "--name", container_name,
-        "--network", network,
-        "--memory", "4g",
-        "--cpus", "2",
-        "-e", "ANTHROPIC_API_KEY",
-        AI_SANDBOX_IMAGE,
-    ] + claude_args
+        "openshell", "sandbox", "create",
+        "--name", sandbox_name,
+        "--no-keep",
+    ]
+    if policy_file.exists():
+        cmd.extend(["--policy", str(policy_file)])
+
+    cmd.append("--")
+    cmd.extend(claude_args)
 
     try:
         result = run(cmd, check=False, timeout=3600)
         return result.returncode == 0
     except subprocess.TimeoutExpired:
-        log(f"  {name} timed out (1h), killing container", level="WARN")
-        run([runtime, "kill", container_name], check=False)
+        log(f"  {name} timed out (1h), deleting sandbox", level="WARN")
+        subprocess.run(
+            ["openshell", "sandbox", "delete", sandbox_name],
+            capture_output=True, text=True, timeout=30,
+        )
         return False
 
 
