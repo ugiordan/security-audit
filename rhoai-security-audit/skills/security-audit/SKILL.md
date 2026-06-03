@@ -28,6 +28,7 @@ the results to the user when it completes.
 | `--reports-only` | Regenerate reports from existing scan data |
 | `--scan-dir <path>` | Specify scan directory for `--reports-only` |
 | `--branch <name>` | Branch to scan (default: main) |
+| `--arch-context <path>` | Path to architecture-analyzer output for enriched AI review |
 
 ## Examples
 

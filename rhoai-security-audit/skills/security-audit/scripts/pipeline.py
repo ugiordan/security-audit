@@ -147,20 +147,15 @@ def _clear_ai_caches():
     return removed
 
 
-def step_ai_skills(repo, output_dir, session_file, sandbox=True, no_cache=False):
+def step_ai_skills(repo, output_dir, session_file, sandbox=True, no_cache=False, arch_context=None):
     """Step 3: Invoke AI skills with optional architecture context."""
     log("Step 3: AI skills")
     if no_cache:
         removed = _clear_ai_caches()
         log(f"  Cleared {removed} AI skill caches (--no-cache)")
-    runtime = detect_container_runtime() if sandbox else None
-
-    # Fetch architecture context for adversarial review enrichment
-    arch_context = _fetch_arch_context(repo, output_dir)
     if arch_context:
         log(f"  Architecture context: {arch_context}")
-    else:
-        log("  No architecture context available (optional)")
+    runtime = detect_container_runtime() if sandbox else None
 
     for skill_cfg in AI_SKILLS:
         name = skill_cfg["name"]
@@ -223,38 +218,6 @@ def _setup_scanner_workspace(repo):
 
     log(f"  Scanner workspace created: {workspace}")
     return str(workspace)
-
-
-def _fetch_arch_context(repo, output_dir):
-    """Download pre-generated architecture context from ugiordan/architecture-analyzer."""
-    repo_short = repo.split("/")[-1]
-    ctx_dir = Path(output_dir) / "raw" / "arch-context"
-
-    try:
-        result = subprocess.run(
-            ["gh", "api", "repos/ugiordan/architecture-analyzer/actions/artifacts",
-             "--jq", f'.artifacts[] | select(.name | endswith("{repo_short}")) | .name'],
-            capture_output=True, text=True, timeout=15,
-        )
-        artifact_name = result.stdout.strip().split("\n")[0] if result.stdout.strip() else ""
-        if not artifact_name:
-            return None
-
-        ctx_dir.mkdir(parents=True, exist_ok=True)
-        subprocess.run(
-            ["gh", "run", "download", "--repo", "ugiordan/architecture-analyzer",
-             "--name", artifact_name, "--dir", str(ctx_dir)],
-            capture_output=True, text=True, timeout=60,
-        )
-
-        # Find the component-architecture.json
-        for p in ctx_dir.rglob("component-architecture.json"):
-            arch_dir = str(p.parent)
-            log(f"  Architecture context found: {artifact_name}")
-            return arch_dir
-    except Exception:
-        pass
-    return None
 
 
 def _invoke_ai_skill(repo, skill_id, name, runtime, sandbox, arch_context=None):
@@ -496,6 +459,7 @@ def main():
     parser.add_argument("--skip-ai", action="store_true", help="Skip AI skills (SAST only)")
     parser.add_argument("--no-sandbox", action="store_true", help="Run AI skills without container isolation")
     parser.add_argument("--no-cache", action="store_true", help="Clear AI skill caches, force fresh review")
+    parser.add_argument("--arch-context", help="Path to architecture-analyzer output directory")
     parser.add_argument("--reports-only", action="store_true", help="Regenerate reports from existing data")
     parser.add_argument("--scan-dir", help="Existing scan directory for --reports-only")
     args = parser.parse_args()
@@ -552,7 +516,7 @@ def main():
             sast_future = pool.submit(step_sast_scan, repo, output_dir, args.branch)
             ai_future = pool.submit(
                 step_ai_skills, repo, output_dir, session_file,
-                not args.no_sandbox, args.no_cache,
+                not args.no_sandbox, args.no_cache, args.arch_context,
             )
             for name, future in [("SAST", sast_future), ("AI skills", ai_future)]:
                 try:
