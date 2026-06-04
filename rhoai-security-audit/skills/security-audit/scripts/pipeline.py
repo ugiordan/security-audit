@@ -295,7 +295,7 @@ def _setup_scanner_workspace(repo):
     return str(workspace)
 
 
-def _invoke_ai_skill(repo, skill_id, name, runtime, sandbox, arch_context=None):
+def _invoke_ai_skill(repo, skill_id, name, _runtime, sandbox, arch_context=None):
     """Run a single AI skill, optionally inside an OpenShell sandbox."""
 
     # Set up workspace for scanner skill (its hooks don't fire in pipeline mode)
@@ -327,12 +327,13 @@ def _invoke_ai_skill(repo, skill_id, name, runtime, sandbox, arch_context=None):
         "--max-turns", "100",
     ]
 
-    if sandbox and _ensure_openshell():
-        return _run_in_openshell(claude_args, name)
-    else:
-        if sandbox:
-            log(f"  WARNING: OpenShell not available, running {name} unsandboxed", level="WARN")
-        return _run_locally(claude_args)
+    if sandbox:
+        if _ensure_openshell():
+            return _run_in_openshell(claude_args, name)
+        else:
+            log(f"  OpenShell not available. Use --no-sandbox to run without isolation.", level="ERROR")
+            return False
+    return _run_locally(claude_args)
 
 
 def _run_in_openshell(claude_args, name):
@@ -546,7 +547,7 @@ def main():
     args = parser.parse_args()
 
     repo = args.repo
-    if not re.match(r"^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$", repo):
+    if not re.match(r"^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$", repo) or ".." in repo:
         log(f"Invalid repo format: {repo}. Expected org/repo.", level="ERROR")
         sys.exit(1)
     repo_short = repo.split("/")[-1]

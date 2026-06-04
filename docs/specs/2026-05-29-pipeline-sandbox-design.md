@@ -154,12 +154,11 @@ For full L7 enforcement (block everything except `POST api.anthropic.com/v1/mess
 
 | Condition | Behavior |
 |-----------|----------|
-| podman/docker available | AI skills run in container with network restrictions |
-| No container runtime + `--no-sandbox` | AI skills run locally, warning logged |
-| No container runtime, no flag | AI skills run locally, warning logged |
-| Container image not found | Pull image automatically, fail if pull fails |
-| AI skill fails inside container | Retry once, then skip skill with warning |
-| Container times out (1h) | Kill container, skip skill with warning |
+| OpenShell available | AI skills run in sandbox with network policy |
+| No sandbox + `--no-sandbox` | AI skills run locally, warning logged |
+| No sandbox, no flag | **Fail with error** (fail-closed, user must opt in to unsandboxed) |
+| AI skill fails inside sandbox | Retry once, then skip skill with warning |
+| Sandbox times out (1h) | Kill sandbox, skip skill with warning |
 
 ## Design: GitLab Migration (Priority 2)
 
