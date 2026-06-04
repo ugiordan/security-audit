@@ -10,17 +10,12 @@ orchestrator. Do not orchestrate steps yourself.
 
 ## How to run
 
-Run the pipeline in the FOREGROUND (not background) so the user
-sees progress in real-time:
-
 ```bash
 python3 ${CLAUDE_SKILL_DIR}/scripts/pipeline.py $ARGUMENTS
 ```
 
-Do NOT use `run_in_background: true`. The pipeline streams progress
-updates that the user needs to see. It handles everything: SAST scan,
-AI skills, triage, and all report formats. When it completes, present
-the results summary and report locations to the user.
+The script handles everything: SAST scan, AI skills, triage, and
+all report formats. Present the results to the user when it completes.
 
 ## Flags
 

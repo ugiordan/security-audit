@@ -360,31 +360,11 @@ def _run_in_openshell(claude_args, name):
 
 
 def _run_locally(claude_args):
-    """Run claude command locally (no sandbox) with progress updates."""
-    import threading
-
-    process = subprocess.Popen(
-        claude_args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-    )
-
-    stop_event = threading.Event()
-
-    def progress_ticker():
-        elapsed = 0
-        while not stop_event.wait(60):
-            elapsed += 1
-            log(f"    ... still running ({elapsed}m)", level="INFO")
-
-    ticker = threading.Thread(target=progress_ticker, daemon=True)
-    ticker.start()
-
+    """Run claude command locally (no sandbox)."""
     try:
-        stdout, _ = process.communicate(timeout=3600)
-        stop_event.set()
-        return process.returncode == 0
+        result = run(claude_args, check=False, timeout=3600)
+        return result.returncode == 0
     except subprocess.TimeoutExpired:
-        stop_event.set()
-        process.kill()
         log("  AI skill timed out (1h)", level="WARN")
         return False
 
