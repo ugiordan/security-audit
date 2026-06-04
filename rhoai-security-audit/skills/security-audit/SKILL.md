@@ -1,6 +1,6 @@
 ---
 name: security-audit
-description: Runs 15 SAST tools and AI security skills against repositories, normalizes outputs, deduplicates findings, generates consolidated markdown + HTML reports with trend tracking. Use when asked to scan repos, generate security reports, check vulnerabilities, review security posture, or track security trends.
+description: Runs SAST tools and AI skills, generates security reports. Works with Claude Code and OpenCode.
 ---
 
 # Security Audit
@@ -11,7 +11,7 @@ orchestrator. Do not orchestrate steps yourself.
 ## How to run
 
 ```bash
-python3 ${CLAUDE_SKILL_DIR}/scripts/pipeline.py $ARGUMENTS
+python3 ${CLAUDE_SKILL_DIR:-.}/scripts/pipeline.py $ARGUMENTS
 ```
 
 The script handles everything: SAST scan, AI skills, triage, and
@@ -27,23 +27,8 @@ all report formats. Present the results to the user when it completes.
 | `--reports-only` | Regenerate reports from existing scan data |
 | `--scan-dir <path>` | Specify scan directory for `--reports-only` |
 | `--branch <name>` | Branch to scan (default: main) |
-| `--arch-context <path>` | Path to architecture-analyzer output for enriched AI review |
-
-## Examples
-
-```bash
-# Full pipeline
-python3 ${CLAUDE_SKILL_DIR}/scripts/pipeline.py opendatahub-io/agents-operator
-
-# SAST only, no AI
-python3 ${CLAUDE_SKILL_DIR}/scripts/pipeline.py opendatahub-io/kube-auth-proxy --skip-ai
-
-# Force fresh AI review (ignore cache)
-python3 ${CLAUDE_SKILL_DIR}/scripts/pipeline.py opendatahub-io/agents-operator --no-cache
-
-# Regenerate reports from existing data
-python3 ${CLAUDE_SKILL_DIR}/scripts/pipeline.py opendatahub-io/agents-operator --reports-only
-```
+| `--arch-context <path>` | Path or GitHub repo for architecture context |
+| `--model <model>` | LLM model (e.g. openai/gpt-4o). Default: harness config |
 
 ## Rules
 
