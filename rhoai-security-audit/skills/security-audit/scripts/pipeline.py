@@ -582,7 +582,7 @@ def main():
     if runtime:
         log(f"Container runtime: {runtime}")
     elif not args.no_sandbox and not args.skip_ai:
-        log("No container runtime (podman/docker) found. AI skills will run unsandboxed.", level="WARN")
+        log("No container runtime (podman/docker) found. Sandbox requires OpenShell or --no-sandbox.", level="INFO")
 
     session_file = step_init(repo, output_dir)
 

@@ -116,8 +116,14 @@ PROVIDER_ENDPOINTS = {
     "anthropic": "api.anthropic.com",
     "openai": "api.openai.com",
     "google": "generativelanguage.googleapis.com",
+    "azure": "*.openai.azure.com",
 }
 ```
+
+Unknown providers (e.g., `ollama/llama3` for local models) default to blocking
+all egress. The user must add the endpoint explicitly via
+`SECURITY_AUDIT_PROVIDER_HOST` env var or the pipeline fails with a clear error
+listing the known providers. This prevents fail-open on unknown providers.
 
 When no container runtime is available AND `--no-sandbox` is NOT set,
 the pipeline fails with an error (fail-closed, not silent fallback):
@@ -188,6 +194,12 @@ the variable isn't set (OpenCode case). Since `pipeline.py` resolves its own
 location via `Path(__file__).resolve().parent.parent`, the actual skill
 directory is always correct regardless of invocation path.
 
+Note: `$ARGUMENTS` is expanded by the hosting LLM, not by a shell. The LLM
+constructs the command from user input which has already been parsed by
+`pipeline.py`'s argparse. Injection via `$ARGUMENTS` requires the LLM itself
+to inject malicious flags, which is a prompt injection risk mitigated by the
+sandbox (network-restricted, no host filesystem access beyond the repo).
+
 ### Model Configuration
 
 OpenCode config (`opencode.json`):
@@ -248,6 +260,20 @@ The `$REPO` variable is always quoted in shell context to prevent injection.
 `pipeline.py` also validates repo format internally as a defense-in-depth
 measure.
 
+**Jira webhook authentication:** The webhook endpoint must verify the request
+originates from Jira using a shared secret or HMAC signature. Without this,
+anyone who knows the trigger URL can submit forged scan requests with arbitrary
+repo values.
+
+**GitLab CI trigger scope:** The pipeline rule `$CI_PIPELINE_SOURCE == "trigger"`
+accepts any valid trigger token. Restrict to specific token holders or add a
+second condition validating the source (e.g., Jira IP allowlist). Consider using
+GitLab's webhook secret validation instead of open trigger tokens.
+
+These are GitLab infrastructure concerns, not pipeline.py concerns, but must be
+configured correctly when deploying the CI integration
+measure.
+
 ### Adversarial-Reviewing Integration
 
 The adversarial-reviewing skill uses Agent/Task tool for subagent dispatch.
@@ -298,6 +324,11 @@ and dispatches agents via whichever tool is available.
 | Harness detection spoofing | Only `SECURITY_AUDIT_HARNESS` env var honored, not repo files |
 | Silent sandbox bypass | Fail-closed when no sandbox available without `--no-sandbox` |
 | Unrestricted permissions | Explicit allowlist, never `--dangerously-skip-permissions` |
+| OpenCode path skips sandboxing | Same OpenShell sandbox wraps both harness subprocess calls |
+| Unknown provider blocks egress | Fail-closed: unknown providers require explicit endpoint config |
+| Jira webhook forgery | Webhook must use shared secret/HMAC validation (infra concern) |
+| GitLab CI open trigger | Restrict trigger tokens, add IP allowlist (infra concern) |
+| $ARGUMENTS injection via LLM | Mitigated by sandbox (no host access) + argparse validation |
 | OpenCode path skips sandboxing | Same sandbox wraps both harness subprocess calls |
 
 ## Success Criteria
