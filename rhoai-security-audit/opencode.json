@@ -1,0 +1,16 @@
+{
+  "model": "google-vertex/claude-sonnet-4-6@default",
+  "small_model": "google-vertex/claude-haiku-4-5@20251001",
+  "provider": {
+    "google-vertex": {}
+  },
+  "permission": {
+    "bash": "allow",
+    "read": "allow",
+    "edit": "allow",
+    "glob": "allow",
+    "grep": "allow",
+    "skill": "allow",
+    "task": "allow"
+  }
+}
