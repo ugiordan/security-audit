@@ -1,0 +1,85 @@
+site_name: "RHOAI Security Audit"
+site_url: https://ugiordan.github.io/rhoai-security-audit/
+repo_url: https://github.com/ugiordan/rhoai-security-audit
+repo_name: ugiordan/rhoai-security-audit
+
+copyright: Copyright &copy; Red Hat, Inc.
+
+theme:
+  name: material
+  language: en
+  icon:
+    repo: fontawesome/brands/github
+    logo: material/shield-lock
+  font:
+    text: Red Hat Text
+    code: Red Hat Mono
+  palette:
+    - scheme: default
+      primary: black
+      toggle:
+        icon: material/brightness-4
+        name: Switch to dark mode
+    - scheme: slate
+      primary: black
+      toggle:
+        icon: material/brightness-7
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.top
+    - navigation.indexes
+    - navigation.path
+    - navigation.expand
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.tabs.link
+    - toc.follow
+
+plugins:
+  - search
+  - glightbox
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Installation: getting-started/installation.md
+    - Quick Start: getting-started/quickstart.md
+  - Pipeline:
+    - Overview: pipeline/overview.md
+    - SAST Tools: pipeline/sast-tools.md
+    - AI Skills: pipeline/ai-skills.md
+    - Triage System: pipeline/triage.md
+  - Reports:
+    - Report Formats: reports/formats.md
+    - Card Format: reports/card-format.md
+    - Confidence Scoring: reports/confidence-scoring.md
+  - Configuration:
+    - OpenCode Setup: configuration/opencode.md
+    - Sandboxing: configuration/sandboxing.md
+    - Architecture Context: configuration/arch-context.md
